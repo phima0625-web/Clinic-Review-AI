@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clinic Review AI Assistant</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>Clinic Review AI Assistant</h1>
+      <p class="subtitle">Prototype — library in your browser (<code>localStorage</code>: <code>clinicReviewLibrary_v1</code>). Start the <code>backend</code> server for <strong>Generate reply</strong> (see help below).</p>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab tab-active" role="tab" id="tab-generate" aria-controls="panel-generate" aria-selected="true">Generate Reply</button>
+      <button type="button" class="tab" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false">Review Library</button>
+      <button type="button" class="tab" role="tab" id="tab-knowledge" aria-controls="panel-knowledge" aria-selected="false">Clinic knowledge</button>
+    </nav>
+
+    <main>
+      <section id="panel-generate" class="panel" role="tabpanel" aria-labelledby="tab-generate">
+        <div class="stack">
+          <div class="card card-generate-inputs">
+            <h2>Draft a public reply</h2>
+            <label class="field">
+              <span>Review we received</span>
+              <textarea id="gen-review" rows="7" placeholder="Copy and paste the review text exactly as posted (or as you received it)…"></textarea>
+            </label>
+            <label class="field category-select-wrap">
+              <span>Category for this review</span>
+              <select id="gen-category">
+                <option value="" selected>Optional — helps match similar library cases</option>
+                <option value="Treatment / Care quality">Treatment / Care quality</option>
+                <option value="Provider interaction">Provider interaction</option>
+                <option value="Wait time / Scheduling">Wait time / Scheduling</option>
+                <option value="Billing / Insurance">Billing / Insurance</option>
+                <option value="Referral / Orders">Referral / Orders</option>
+                <option value="Front desk / Staff">Front desk / Staff</option>
+                <option value="Other">Other</option>
+              </select>
+              <p class="hint category-select-hint">If this review clearly fits one topic, choose it. Otherwise leave optional.</p>
+            </label>
+            <label class="field">
+              <span>What happened (context for you and the AI)</span>
+              <textarea id="gen-situation" rows="6" placeholder="Explain what occurred from the clinic’s side—facts your team knows. This is not posted publicly; the reply must still be safe for the public and must not leak private health details."></textarea>
+            </label>
+            <div class="actions actions-generate-primary">
+              <button type="button" id="btn-generate" class="btn primary btn-generate-full">Generate new reply</button>
+            </div>
+          </div>
+
+          <div class="card clarify-card" id="gen-clarify-card" hidden>
+            <h2>Clarifying questions</h2>
+            <p class="hint">The model is asking <strong>you (clinic staff)</strong> about <strong>policy and operations</strong> so it can draft the public reply—not questions meant for the patient. Your answers are saved to clinic knowledge for next time. Skip any you prefer not to answer.</p>
+            <form id="gen-clarify-form" class="clarify-form"></form>
+            <div class="actions actions-output-secondary">
+              <button type="button" id="btn-clarify-submit" class="btn primary">Submit answers and continue</button>
+              <button type="button" id="btn-clarify-skip" class="btn">Skip and draft anyway</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Suggested reply</h2>
+            <textarea id="gen-output" rows="10" readonly placeholder="Your draft will appear here after you click Generate new reply…"></textarea>
+            <div class="actions actions-output-secondary">
+              <button type="button" id="btn-copy" class="btn" disabled>Copy reply</button>
+              <button type="button" id="btn-save-library" class="btn" disabled>Save to library</button>
+            </div>
+          </div>
+
+          <div class="card transparency">
+            <h2>Transparency</h2>
+            <p class="hint">Which library cases were sent to the model, why they were chosen, which clinic knowledge entries the model cited, and which style rules applied (read-only).</p>
+            <div class="trans-sub">
+              <h3>Cases sent to Gemini</h3>
+              <div id="gen-transparency-matches"></div>
+            </div>
+            <div class="trans-sub">
+              <h3>Why these cases were selected</h3>
+              <p id="gen-transparency-selection-why"></p>
+            </div>
+            <div class="trans-sub">
+              <h3>Clinic knowledge cited</h3>
+              <p class="hint">Summarizes which knowledge categories were included in the prompt, then lists cited entries (id, category, Q/A). “This generation” rows are clarifying answers from this run.</p>
+              <div id="gen-transparency-knowledge"></div>
+            </div>
+            <div class="trans-sub">
+              <h3>Style rules applied</h3>
+              <p id="gen-transparency-style"></p>
+            </div>
+            <div class="trans-sub">
+              <h3>About this reply</h3>
+              <p id="gen-transparency-why"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="panel-knowledge" class="panel" role="tabpanel" aria-labelledby="tab-knowledge" hidden>
+        <div class="stack">
+          <div class="card knowledge-card">
+            <h2>Clinic knowledge</h2>
+            <p class="hint">Saved Q/A by <strong>the same seven categories</strong> as Review Library (server <code>backend/knowledge.json</code>). When you pick a review category on Generate, the model receives knowledge in that category plus “Other” general entries. Add, edit, or delete here. <strong>Transparency</strong> summarizes what was injected and which entries the model cited.</p>
+            <div class="kb-toolbar">
+              <input type="search" id="kb-search" placeholder="Search saved knowledge…" />
+              <button type="button" id="kb-add" class="btn">Add entry</button>
+            </div>
+            <div id="kb-list" class="kb-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="panel-library" class="panel" role="tabpanel" aria-labelledby="tab-library" hidden>
+        <div class="stack library-layout">
+          <div class="card">
+            <h2 id="library-form-title">Add to library</h2>
+            <p class="hint library-form-intro">
+              Save real examples so the app can match tone, policies, and how you handled similar situations. Nothing here is sent to the internet except when you generate a reply (then only the top few similar rows go to Gemini, with your API key on the server).
+            </p>
+            <form id="library-form">
+              <input type="hidden" id="lf-editing-id" value="" />
+              <label class="field category-select-wrap">
+                <span>Category</span>
+                <select id="lf-category">
+                  <option value="" selected>Select a category</option>
+                  <option value="Treatment / Care quality">Treatment / Care quality</option>
+                  <option value="Provider interaction">Provider interaction</option>
+                  <option value="Wait time / Scheduling">Wait time / Scheduling</option>
+                  <option value="Billing / Insurance">Billing / Insurance</option>
+                  <option value="Referral / Orders">Referral / Orders</option>
+                  <option value="Front desk / Staff">Front desk / Staff</option>
+                  <option value="Other">Other</option>
+                </select>
+                <p class="hint category-select-hint" id="lf-category-hint">
+                  Pick the best match for this review. Only these categories are available.
+                </p>
+                <p class="category-helper hint" id="lf-category-help" hidden></p>
+              </label>
+              <label class="field">
+                <span>Past review we received</span>
+                <textarea id="lf-review" rows="4" required placeholder="Paste the review exactly as the patient posted it…"></textarea>
+              </label>
+              <label class="field">
+                <span>Past context for that review</span>
+                <textarea id="lf-context" rows="4" placeholder="What happened on your side, policies applied, or facts staff agreed on. Helps the AI understand your tone and rules—not posted publicly as-is."></textarea>
+              </label>
+              <label class="field">
+                <span>Final approved reply (as published)</span>
+                <textarea id="lf-reply" rows="5" required placeholder="The exact reply you posted publicly after approval…"></textarea>
+              </label>
+              <div class="actions">
+                <button type="submit" id="library-form-submit" class="btn primary">Save</button>
+                <button type="button" id="library-form-cancel" class="btn" hidden>Cancel edit</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>Search library</h2>
+            <label class="field">
+              <span>Filter</span>
+              <input type="search" id="library-search" placeholder="Search category, review, context, or reply…" />
+            </label>
+            <div id="library-list" class="library-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="help-footer">
+      <details>
+        <summary>How to use &amp; limitations</summary>
+        <ul>
+          <li><strong>Frontend:</strong> open <code>index.html</code> in a browser (double-click or Terminal: <code>open index.html</code>).</li>
+          <li><strong>Backend + Gemini:</strong> in <code>backend/</code>, copy <code>.env.example</code> to <code>.env</code>, add <code>GEMINI_API_KEY=</code>your key (from <a href="https://aistudio.google.com/app/apikey">Google AI Studio</a>), optionally <code>CLINIC_PUBLIC_PHONE=</code> and <code>CLINIC_OPERATIONS_EMAIL=</code> so drafts use your real operations phone and email (not placeholders), run <code>npm install</code> once, then <code>npm start</code>.</li>
+          <li><strong>Clinic knowledge:</strong> open the <strong>Clinic knowledge</strong> tab to manage saved Q/A. After generating, <strong>Transparency</strong> lists which knowledge ids the model cited.</li>
+          <li><strong>Review library:</strong> each card can <strong>Suggest clinic knowledge</strong> — Gemini proposes Q/A from the case (answer grounded in your published reply); you edit in a dialog, then add to <strong>Clinic knowledge</strong>.</li>
+          <li><strong>Review library (data):</strong> each row stores a single <strong>category</strong> (fixed list), <strong>past review</strong>, optional <strong>past internal context</strong>, and the <strong>final reply you published</strong>. The model uses the top similar rows to learn tone and handling—not “training” in the ML sense.</li>
+          <li><strong>Generate:</strong> paste the <strong>review we received</strong>, optionally choose a <strong>category</strong> for that review (helps pick similar library examples), add optional <strong>what happened</strong> context for the AI (not posted as-is), then <strong>Generate new reply</strong>. Data POSTs to <code>http://localhost:3000/generate-reply</code> (no API key in the browser). If the server is off, you get the offline template instead.</li>
+        </ul>
+      </details>
+    </footer>
+  </div>
+
+  <div id="library-case-modal" class="case-modal-root" hidden>
+    <div class="case-modal-backdrop" id="library-case-modal-backdrop" tabindex="-1"></div>
+    <div class="case-modal-panel" role="dialog" aria-modal="true" aria-labelledby="library-case-modal-title">
+      <header class="case-modal-header">
+        <h2 id="library-case-modal-title">Library case</h2>
+        <button type="button" class="btn case-modal-close" id="library-case-modal-close" aria-label="Close dialog">
+          Close
+        </button>
+      </header>
+      <div class="case-modal-body" id="library-case-modal-body"></div>
+    </div>
+  </div>
+
+  <div id="knowledge-suggest-modal" class="case-modal-root" hidden>
+    <div class="case-modal-backdrop" id="knowledge-suggest-backdrop" tabindex="-1"></div>
+    <div class="case-modal-panel" role="dialog" aria-modal="true" aria-labelledby="knowledge-suggest-title">
+      <header class="case-modal-header">
+        <h2 id="knowledge-suggest-title">Clinic knowledge from case</h2>
+        <button type="button" class="btn case-modal-close" id="knowledge-suggest-close" aria-label="Close dialog">
+          Close
+        </button>
+      </header>
+      <div class="case-modal-body knowledge-suggest-body">
+        <p class="hint" id="knowledge-suggest-status"></p>
+        <label class="field">
+          <span>Category (same list as library)</span>
+          <select id="ks-category"></select>
+        </label>
+        <label class="field">
+          <span>Question</span>
+          <textarea id="ks-question" rows="3" placeholder="Reusable staff-facing question…"></textarea>
+        </label>
+        <label class="field">
+          <span>Answer (derived from published reply — edit before saving)</span>
+          <textarea id="ks-answer" rows="8"></textarea>
+        </label>
+        <div class="actions knowledge-suggest-actions">
+          <button type="button" class="btn" id="ks-cancel">Cancel</button>
+          <button type="button" class="btn primary" id="ks-save" disabled>Add to clinic knowledge</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

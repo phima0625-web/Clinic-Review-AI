@@ -1,0 +1,8 @@
+# Installed packages (run `npm install` to recreate)
+node_modules/
+
+# Later: put API keys here — never commit this file
+.env
+
+# Persisted clinic knowledge (clarifications). Local to each install.
+knowledge.json

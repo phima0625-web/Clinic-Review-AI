@@ -1,0 +1,19 @@
+# --- macOS / 系统 ---
+.DS_Store
+
+# --- 秘密（绝对不能提交）---
+.env
+backend/.env
+
+# --- 依赖（体积大，用 npm install 重新生成）---
+backend/node_modules/
+
+# --- 本地数据（每台电脑 / 每台服务器各自一份）---
+backend/knowledge.json
+
+# --- 日志 ---
+*.log
+npm-debug.log*
+
+# --- 常见编辑器（可选；想共享 VS Code 设置可删掉下一行）---
+# .vscode/
