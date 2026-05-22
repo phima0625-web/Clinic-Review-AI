@@ -133,6 +133,7 @@ body {
 
 input[type="text"],
 input[type="search"],
+input[type="password"],
 textarea {
   width: 100%;
   max-width: 100%;
@@ -781,6 +782,16 @@ body.auth-pending .app {
   margin: 0 0 0.5rem;
   font-size: 1.25rem;
   color: var(--primary);
+}
+
+.login-card .field {
+  margin-bottom: 0.75rem;
+}
+
+.login-card input[type="text"],
+.login-card input[type="password"] {
+  width: 100%;
+  min-height: 2.5rem;
 }
 
 .login-card .actions {
