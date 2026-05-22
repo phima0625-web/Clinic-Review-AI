@@ -227,43 +227,83 @@ const MAX_SIMILAR_CASES = 5;
 app.use(express.json({ limit: "1mb" }));
 app.use(cors());
 
-/** Shared login — set APP_USERNAME, APP_PASSWORD, and APP_SESSION_SECRET in .env (or Render env). */
+/** Admin login — APP_USERNAME / APP_PASSWORD / APP_SESSION_SECRET. Staff: USER_USERNAME / USER_PASSWORD. */
 function authEnabled() {
-  const u = process.env.APP_USERNAME && String(process.env.APP_USERNAME).trim();
-  const p = process.env.APP_PASSWORD && String(process.env.APP_PASSWORD).trim();
   const s = process.env.APP_SESSION_SECRET && String(process.env.APP_SESSION_SECRET).trim();
-  return Boolean(u && p && s);
+  if (!s) return false;
+  const admin =
+    process.env.APP_USERNAME &&
+    String(process.env.APP_USERNAME).trim() &&
+    process.env.APP_PASSWORD &&
+    String(process.env.APP_PASSWORD);
+  const user =
+    process.env.USER_USERNAME &&
+    String(process.env.USER_USERNAME).trim() &&
+    process.env.USER_PASSWORD &&
+    String(process.env.USER_PASSWORD);
+  return Boolean(admin || user);
+}
+
+function userLoginEnabled() {
+  const u = process.env.USER_USERNAME && String(process.env.USER_USERNAME).trim();
+  const p = process.env.USER_PASSWORD && String(process.env.USER_PASSWORD);
+  return Boolean(u && p);
+}
+
+function adminLoginEnabled() {
+  const u = process.env.APP_USERNAME && String(process.env.APP_USERNAME).trim();
+  const p = process.env.APP_PASSWORD && String(process.env.APP_PASSWORD);
+  return Boolean(u && p);
 }
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-function createSessionToken() {
+function createSessionToken(role) {
   const secret = String(process.env.APP_SESSION_SECRET).trim();
   const exp = Date.now() + SESSION_TTL_MS;
-  const payload = `session:${exp}`;
+  const r = role === "user" ? "user" : "admin";
+  const payload = `session:${r}:${exp}`;
   const sig = crypto.createHmac("sha256", secret).update(payload).digest("hex");
   return `${payload}.${sig}`;
 }
 
-function verifySessionToken(token) {
-  if (!authEnabled() || !token) return false;
+/** @returns {{ valid: boolean, role: "admin"|"user"|null, exp: number|null }} */
+function parseSessionToken(token) {
+  if (!authEnabled() || !token) return { valid: false, role: null, exp: null };
   const parts = String(token).split(".");
-  if (parts.length !== 2) return false;
+  if (parts.length !== 2) return { valid: false, role: null, exp: null };
   const [payload, sig] = parts;
   const secret = String(process.env.APP_SESSION_SECRET).trim();
   const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
-  if (sig.length !== expected.length || sig !== expected) return false;
-  const m = payload.match(/^session:(\d+)$/);
-  if (!m) return false;
-  return Date.now() < Number(m[1]);
+  if (sig.length !== expected.length || sig !== expected) {
+    return { valid: false, role: null, exp: null };
+  }
+  const m = payload.match(/^session:(admin|user):(\d+)$/);
+  if (!m) return { valid: false, role: null, exp: null };
+  const exp = Number(m[2]);
+  if (Date.now() >= exp) return { valid: false, role: null, exp: null };
+  return { valid: true, role: m[1], exp };
 }
 
 function requireAuth(req, res, next) {
-  if (!authEnabled()) return next();
+  if (!authEnabled()) {
+    req.authRole = "admin";
+    return next();
+  }
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (verifySessionToken(token)) return next();
+  const parsed = parseSessionToken(token);
+  if (parsed.valid && parsed.role) {
+    req.authRole = parsed.role;
+    return next();
+  }
   return res.status(401).json({ error: "Login required." });
+}
+
+function requireAdmin(req, res, next) {
+  if (!authEnabled()) return next();
+  if (req.authRole === "admin") return next();
+  return res.status(403).json({ error: "Admin access required." });
 }
 
 let genaiModulePromise = null;
@@ -990,26 +1030,52 @@ app.get("/", (req, res) => {
 });
 
 app.get("/auth/config", (req, res) => {
-  res.json({ authRequired: authEnabled() });
+  res.json({
+    authRequired: authEnabled(),
+    userLoginEnabled: userLoginEnabled(),
+    adminLoginEnabled: adminLoginEnabled(),
+  });
 });
 
 app.post("/auth/login", (req, res) => {
   if (!authEnabled()) {
-    return res.json({ ok: true, authRequired: false });
+    return res.json({ ok: true, authRequired: false, role: "admin" });
   }
   const { username, password } = req.body || {};
   const u = String(username || "").trim();
   const p = String(password || "");
   if (
+    adminLoginEnabled() &&
     u === String(process.env.APP_USERNAME).trim() &&
     p === String(process.env.APP_PASSWORD)
   ) {
-    return res.json({ ok: true, authRequired: true, token: createSessionToken() });
+    return res.json({
+      ok: true,
+      authRequired: true,
+      role: "admin",
+      token: createSessionToken("admin"),
+    });
+  }
+  if (
+    userLoginEnabled() &&
+    u === String(process.env.USER_USERNAME).trim() &&
+    p === String(process.env.USER_PASSWORD)
+  ) {
+    return res.json({
+      ok: true,
+      authRequired: true,
+      role: "user",
+      token: createSessionToken("user"),
+    });
   }
   return res.status(401).json({ error: "Invalid username or password." });
 });
 
-app.get("/knowledge", requireAuth, async (req, res) => {
+app.get("/auth/me", requireAuth, (req, res) => {
+  res.json({ role: req.authRole || "admin" });
+});
+
+app.get("/knowledge", requireAuth, requireAdmin, async (req, res) => {
   try {
     res.json({ items: await loadKnowledge() });
   } catch (err) {
@@ -1021,7 +1087,7 @@ app.get("/knowledge", requireAuth, async (req, res) => {
  * Replace the entire knowledge list. Used by the UI for Add/Edit/Delete.
  * Body: { items: [{ id?, question, answer, category, createdAt?, updatedAt? }] }
  */
-app.put("/knowledge", requireAuth, async (req, res) => {
+app.put("/knowledge", requireAuth, requireAdmin, async (req, res) => {
   const { items } = req.body || {};
   if (!Array.isArray(items)) {
     return res.status(400).json({ error: "Field 'items' must be an array." });
@@ -1053,7 +1119,7 @@ app.put("/knowledge", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/library", requireAuth, async (req, res) => {
+app.get("/library", requireAuth, requireAdmin, async (req, res) => {
   try {
     if (!isDbEnabled()) {
       return res.status(503).json({
@@ -1069,7 +1135,7 @@ app.get("/library", requireAuth, async (req, res) => {
 /**
  * Replace the entire review library. Body: { items: [{ id?, category, reviewText, contextText?, replyText, createdAt? }] }
  */
-app.put("/library", requireAuth, async (req, res) => {
+app.put("/library", requireAuth, requireAdmin, async (req, res) => {
   if (!isDbEnabled()) {
     return res.status(503).json({
       error: "Review library requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
@@ -1108,7 +1174,7 @@ app.put("/library", requireAuth, async (req, res) => {
  * Body: { libraryCase: { category?, reviewText?, contextText?, replyText } }
  * Uses Gemini to suggest one Q/A; **answer** is derived from the published reply. Client reviews before PUT /knowledge.
  */
-app.post("/suggest-knowledge-from-case", requireAuth, async (req, res) => {
+app.post("/suggest-knowledge-from-case", requireAuth, requireAdmin, async (req, res) => {
   const libCase = req.body && req.body.libraryCase;
   if (!libCase || typeof libCase !== "object") {
     return res.status(400).json({ error: "Field 'libraryCase' must be an object." });
@@ -1349,7 +1415,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Clinic Review AI backend: http://localhost:${PORT}`);
   console.log(
-    "Routes: GET /, GET /auth/config, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /generate-reply, POST /suggest-knowledge-from-case"
+    "Routes: GET /, GET /auth/config, GET /auth/me, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /generate-reply, POST /suggest-knowledge-from-case"
   );
   if (isDbEnabled()) {
     console.log("Storage: Supabase (clinic_knowledge + review_library).");
@@ -1359,7 +1425,10 @@ app.listen(PORT, () => {
     );
   }
   if (authEnabled()) {
-    console.log("App login: enabled (APP_USERNAME / APP_PASSWORD / APP_SESSION_SECRET).");
+    const parts = [];
+    if (adminLoginEnabled()) parts.push("admin (APP_USERNAME)");
+    if (userLoginEnabled()) parts.push("staff (USER_USERNAME)");
+    console.log(`App login: enabled — ${parts.join(", ")}.`);
   } else {
     console.warn(
       "Optional: set APP_USERNAME, APP_PASSWORD, and APP_SESSION_SECRET in .env to require login."

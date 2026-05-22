@@ -10,9 +10,11 @@
    */
   const API_BASE_URL = "https://clinic-review-ai.onrender.com";
   const AUTH_STORAGE_KEY = "clinicReviewAuthToken_v1";
+  const AUTH_ROLE_STORAGE_KEY = "clinicReviewAuthRole_v1";
 
   let authRequired = false;
   let loginWaiters = [];
+  let currentRole = "admin";
 
   function getAuthToken() {
     try {
@@ -28,6 +30,48 @@
       else sessionStorage.removeItem(AUTH_STORAGE_KEY);
     } catch {
       /* ignore */
+    }
+  }
+
+  function getAuthRole() {
+    try {
+      const stored = sessionStorage.getItem(AUTH_ROLE_STORAGE_KEY);
+      if (stored === "user" || stored === "admin") return stored;
+    } catch {
+      /* ignore */
+    }
+    return currentRole === "user" ? "user" : "admin";
+  }
+
+  function setAuthRole(role) {
+    currentRole = role === "user" ? "user" : "admin";
+    try {
+      sessionStorage.setItem(AUTH_ROLE_STORAGE_KEY, currentRole);
+    } catch {
+      /* ignore */
+    }
+    applyRoleUi(currentRole);
+  }
+
+  function clearAuthRole() {
+    currentRole = "admin";
+    try {
+      sessionStorage.removeItem(AUTH_ROLE_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    document.body.classList.remove("app--user");
+  }
+
+  function isAdminRole() {
+    return getAuthRole() !== "user";
+  }
+
+  function applyRoleUi(role) {
+    const isUser = role === "user";
+    document.body.classList.toggle("app--user", isUser);
+    if (isUser && typeof switchToGenerate === "function") {
+      switchToGenerate();
     }
   }
 
@@ -90,6 +134,7 @@
     const res = await fetch(`${API_BASE_URL}${path}`, Object.assign({}, opts, { headers }));
     if (res.status === 401) {
       setAuthToken("");
+      clearAuthRole();
       showLoginScreen("Session expired. Please sign in again.");
       throw new Error("Login required");
     }
@@ -109,6 +154,7 @@
     }
 
     if (!authRequired) {
+      setAuthRole("admin");
       hideLoginScreen();
       return true;
     }
@@ -116,8 +162,10 @@
     const token = getAuthToken();
     if (token) {
       try {
-        const res = await apiFetch("/knowledge");
+        const res = await apiFetch("/auth/me");
         if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setAuthRole(data.role || "admin");
           hideLoginScreen();
           return true;
         }
@@ -165,11 +213,14 @@
         return;
       }
       if (data.token) setAuthToken(data.token);
+      setAuthRole(data.role || "admin");
       passEl.value = "";
       hideLoginScreen();
       resolveLoginWaiters();
-      fetchKnowledge();
-      fetchLibrary();
+      if (isAdminRole()) {
+        fetchKnowledge();
+        fetchLibrary();
+      }
     } catch {
       if (err) {
         err.textContent = "Could not reach the server. Try again in a moment.";
@@ -187,6 +238,7 @@
     });
     document.getElementById("btn-logout")?.addEventListener("click", () => {
       setAuthToken("");
+      clearAuthRole();
       showLoginScreen();
     });
   }
@@ -1632,7 +1684,9 @@
     document.getElementById("panel-knowledge").hidden = false;
     document.getElementById("panel-generate").hidden = true;
     document.getElementById("panel-library").hidden = true;
-    fetchKnowledge();
+    if (isAdminRole()) {
+      fetchKnowledge();
+    }
   }
 
   function resetLibraryForm() {
@@ -1651,7 +1705,9 @@
     const authed = await bootstrapAuth();
     if (!authed) await waitForLogin();
 
-    await fetchLibrary();
+    if (isAdminRole()) {
+      await fetchLibrary();
+    }
     ensureKnowledgeSuggestCategorySelect();
 
     document.getElementById("tab-generate").addEventListener("click", switchToGenerate);
@@ -1723,23 +1779,26 @@
         const result = await generateReplyFacade(reviewText, lib, clarifications, round);
         if (result.status === "questions" && result.questions.length && attempt === 0) {
           lastQuestionsTransparency = result.transparency;
-          renderTransparency("gen-transparency-matches", result.transparency);
+          if (isAdminRole()) {
+            renderTransparency("gen-transparency-matches", result.transparency);
+          }
           const answers = await renderClarifyForm(result.questions);
           clarifications = answers;
           round = 2;
-          // Refresh saved knowledge view in case the server also persists at this stage.
-          fetchKnowledge();
+          if (isAdminRole()) fetchKnowledge();
           continue;
         }
 
         genOut.value = result.reply || "";
         genOut.readOnly = false;
         lastTransparency = result.transparency || lastQuestionsTransparency;
-        renderTransparency("gen-transparency-matches", lastTransparency || result.transparency);
+        if (isAdminRole()) {
+          renderTransparency("gen-transparency-matches", lastTransparency || result.transparency);
+        }
         document.getElementById("btn-copy").disabled = !result.reply;
-        document.getElementById("btn-save-library").disabled = !result.reply;
-        // Saved knowledge may have grown if clarifications were submitted.
-        fetchKnowledge();
+        const saveBtn = document.getElementById("btn-save-library");
+        if (saveBtn) saveBtn.disabled = !result.reply;
+        if (isAdminRole()) fetchKnowledge();
         return;
       }
     }
@@ -1763,7 +1822,9 @@
     document.getElementById("kb-add")?.addEventListener("click", () => {
       startKnowledgeAdd();
     });
-    fetchKnowledge();
+    if (isAdminRole()) {
+      fetchKnowledge();
+    }
 
     document.getElementById("btn-copy").addEventListener("click", async () => {
       try {

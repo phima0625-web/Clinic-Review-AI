@@ -797,3 +797,38 @@ body.auth-pending .app {
 .login-card .actions {
   margin-top: 0.75rem;
 }
+
+/* Staff (user) role — Generate-only layout */
+.user-only {
+  display: none;
+}
+
+body.app--user .admin-only {
+  display: none !important;
+}
+
+body.app--user .user-only {
+  display: block;
+}
+
+body.app--user .user-only.hint {
+  display: block;
+}
+
+body.app--user .app {
+  max-width: 42rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+body.app--user .app-header {
+  margin-bottom: 1rem;
+}
+
+body.app--user #panel-generate .card {
+  margin-bottom: 1rem;
+}
+
+body.app--user #panel-generate .card:last-child {
+  margin-bottom: 0;
+}

@@ -10,7 +10,7 @@
   <div id="login-screen" class="login-screen" hidden>
     <div class="login-card card">
       <h2>Sign in</h2>
-      <p class="hint">Shared clinic account. Ask your admin for the username and password.</p>
+      <p class="hint">Sign in with your admin or staff account.</p>
       <label class="field">
         <span>Username</span>
         <input type="text" id="login-username" autocomplete="username" />
@@ -32,10 +32,11 @@
         <h1>Clinic Review AI Assistant</h1>
         <button type="button" class="btn btn-logout" id="btn-logout" hidden>Sign out</button>
       </div>
-      <p class="subtitle">Review library and clinic knowledge are stored in Supabase when configured (shared across staff). Without Supabase, the library falls back to this browser only.</p>
+      <p class="subtitle admin-only">Review library and clinic knowledge are stored in Supabase when configured (shared across staff). Without Supabase, the library falls back to this browser only.</p>
+      <p class="subtitle user-only">Draft a public reply to a patient review.</p>
     </header>
 
-    <nav class="tabs" role="tablist">
+    <nav class="tabs admin-only" role="tablist">
       <button type="button" class="tab tab-active" role="tab" id="tab-generate" aria-controls="panel-generate" aria-selected="true">Generate Reply</button>
       <button type="button" class="tab" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false">Review Library</button>
       <button type="button" class="tab" role="tab" id="tab-knowledge" aria-controls="panel-knowledge" aria-selected="false">Clinic knowledge</button>
@@ -62,7 +63,8 @@
                 <option value="Front desk / Staff">Front desk / Staff</option>
                 <option value="Other">Other</option>
               </select>
-              <p class="hint category-select-hint">If this review clearly fits one topic, choose it. Otherwise leave optional.</p>
+              <p class="hint category-select-hint admin-only">If this review clearly fits one topic, choose it. Otherwise leave optional.</p>
+              <p class="hint category-select-hint user-only">If this review fits one topic, choose it. Otherwise leave optional.</p>
             </label>
             <label class="field">
               <span>What happened (context for you and the AI)</span>
@@ -75,7 +77,8 @@
 
           <div class="card clarify-card" id="gen-clarify-card" hidden>
             <h2>Clarifying questions</h2>
-            <p class="hint">The model is asking <strong>you (clinic staff)</strong> about <strong>policy and operations</strong> so it can draft the public reply—not questions meant for the patient. Your answers are saved to clinic knowledge for next time. Skip any you prefer not to answer.</p>
+            <p class="hint admin-only">The model is asking <strong>you (clinic staff)</strong> about <strong>policy and operations</strong> so it can draft the public reply—not questions meant for the patient. Your answers are saved to clinic knowledge for next time. Skip any you prefer not to answer.</p>
+            <p class="hint user-only">The AI needs a few details about clinic policy or operations before it can draft the public reply. Answer from the clinic’s perspective—not as the patient. Skip any question you are unsure about.</p>
             <form id="gen-clarify-form" class="clarify-form"></form>
             <div class="actions actions-output-secondary">
               <button type="button" id="btn-clarify-submit" class="btn primary">Submit answers and continue</button>
@@ -88,11 +91,11 @@
             <textarea id="gen-output" rows="10" readonly placeholder="Your draft will appear here after you click Generate new reply…"></textarea>
             <div class="actions actions-output-secondary">
               <button type="button" id="btn-copy" class="btn" disabled>Copy reply</button>
-              <button type="button" id="btn-save-library" class="btn" disabled>Save to library</button>
+              <button type="button" id="btn-save-library" class="btn admin-only" disabled>Save to library</button>
             </div>
           </div>
 
-          <div class="card transparency">
+          <div class="card transparency admin-only">
             <h2>Transparency</h2>
             <p class="hint">Which library cases were sent to the model, why they were chosen, which clinic knowledge entries the model cited, and which style rules applied (read-only).</p>
             <div class="trans-sub">
@@ -120,7 +123,7 @@
         </div>
       </section>
 
-      <section id="panel-knowledge" class="panel" role="tabpanel" aria-labelledby="tab-knowledge" hidden>
+      <section id="panel-knowledge" class="panel admin-only" role="tabpanel" aria-labelledby="tab-knowledge" hidden>
         <div class="stack">
           <div class="card knowledge-card">
             <h2>Clinic knowledge</h2>
@@ -134,7 +137,7 @@
         </div>
       </section>
 
-      <section id="panel-library" class="panel" role="tabpanel" aria-labelledby="tab-library" hidden>
+      <section id="panel-library" class="panel admin-only" role="tabpanel" aria-labelledby="tab-library" hidden>
         <div class="stack library-layout">
           <div class="card">
             <h2 id="library-form-title">Add to library</h2>
@@ -191,7 +194,7 @@
       </section>
     </main>
 
-    <footer class="help-footer">
+    <footer class="help-footer admin-only">
       <details>
         <summary>How to use &amp; limitations</summary>
         <ul>
@@ -206,7 +209,7 @@
     </footer>
   </div>
 
-  <div id="library-case-modal" class="case-modal-root" hidden>
+  <div id="library-case-modal" class="case-modal-root admin-only" hidden>
     <div class="case-modal-backdrop" id="library-case-modal-backdrop" tabindex="-1"></div>
     <div class="case-modal-panel" role="dialog" aria-modal="true" aria-labelledby="library-case-modal-title">
       <header class="case-modal-header">
@@ -219,7 +222,7 @@
     </div>
   </div>
 
-  <div id="knowledge-suggest-modal" class="case-modal-root" hidden>
+  <div id="knowledge-suggest-modal" class="case-modal-root admin-only" hidden>
     <div class="case-modal-backdrop" id="knowledge-suggest-backdrop" tabindex="-1"></div>
     <div class="case-modal-panel" role="dialog" aria-modal="true" aria-labelledby="knowledge-suggest-title">
       <header class="case-modal-header">
