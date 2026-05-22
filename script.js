@@ -169,6 +169,7 @@
       hideLoginScreen();
       resolveLoginWaiters();
       fetchKnowledge();
+      fetchLibrary();
     } catch {
       if (err) {
         err.textContent = "Could not reach the server. Try again in a moment.";
@@ -318,7 +319,10 @@
     },
   ];
 
-  function loadLibrary() {
+  let libraryCache = [];
+  let libraryUsesRemote = false;
+
+  function loadLibraryFromLocalStorage() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return [];
@@ -330,14 +334,88 @@
     }
   }
 
-  function saveLibrary(cases) {
+  function saveLibraryToLocalStorage(cases) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cases));
   }
 
-  function ensureSeeded() {
-    if (loadLibrary().length === 0) {
-      saveLibrary(SEED_CASES);
+  function loadLibrary() {
+    return libraryCache.slice();
+  }
+
+  async function fetchLibrary() {
+    try {
+      const res = await apiFetch("/library");
+      if (res.status === 503) {
+        libraryUsesRemote = false;
+        libraryCache = loadLibraryFromLocalStorage();
+        if (libraryCache.length === 0) {
+          libraryCache = SEED_CASES.map(normalizeLibraryCase);
+          saveLibraryToLocalStorage(libraryCache);
+        }
+        renderLibraryList();
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      libraryUsesRemote = true;
+      libraryCache = Array.isArray(data.items) ? data.items.map(normalizeLibraryCase) : [];
+      await migrateLocalLibraryIfNeeded();
+      await ensureSeededRemote();
+    } catch (err) {
+      if (err && err.message === "Login required") return;
+      console.warn("Could not load review library — using browser storage.", err);
+      libraryUsesRemote = false;
+      libraryCache = loadLibraryFromLocalStorage();
+      if (libraryCache.length === 0) {
+        libraryCache = SEED_CASES.map(normalizeLibraryCase);
+        saveLibraryToLocalStorage(libraryCache);
+      }
     }
+    renderLibraryList();
+  }
+
+  async function saveLibraryRemote(items) {
+    const res = await apiFetch("/library", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText || "Save failed");
+    libraryCache = Array.isArray(data.items) ? data.items.map(normalizeLibraryCase) : items;
+    renderLibraryList();
+  }
+
+  async function persistLibrary(cases) {
+    libraryCache = cases.map(normalizeLibraryCase);
+    if (libraryUsesRemote) {
+      await saveLibraryRemote(libraryCache);
+    } else {
+      saveLibraryToLocalStorage(libraryCache);
+      renderLibraryList();
+    }
+  }
+
+  async function migrateLocalLibraryIfNeeded() {
+    if (!libraryUsesRemote) return;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const local = JSON.parse(raw);
+      if (!Array.isArray(local) || local.length === 0) return;
+      if (libraryCache.length > 0) return;
+      libraryCache = local.map(normalizeLibraryCase);
+      await saveLibraryRemote(libraryCache);
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (err) {
+      console.warn("Local library migration skipped:", err);
+    }
+  }
+
+  async function ensureSeededRemote() {
+    if (!libraryUsesRemote || libraryCache.length > 0) return;
+    libraryCache = SEED_CASES.map(normalizeLibraryCase);
+    await saveLibraryRemote(libraryCache);
   }
 
   function tokenize(text) {
@@ -1179,17 +1257,17 @@
     }
   }
 
-  function deleteLibraryCase(id) {
+  async function deleteLibraryCase(id) {
     const lib = loadLibrary().filter((c) => c.id !== id);
-    saveLibrary(lib);
+    await persistLibrary(lib);
   }
 
-  function upsertLibraryCase(entry) {
+  async function upsertLibraryCase(entry) {
     const lib = loadLibrary();
     const i = lib.findIndex((c) => c.id === entry.id);
     if (i >= 0) lib[i] = entry;
     else lib.unshift(entry);
-    saveLibrary(lib);
+    await persistLibrary(lib);
   }
 
   function renderTransparency(container, transparency) {
@@ -1477,8 +1555,7 @@
         if (!c) return;
         if (action === "del") {
           if (confirm("Delete this case from the library?")) {
-            deleteLibraryCase(id);
-            renderLibraryList();
+            deleteLibraryCase(id).catch((err) => alert(err.message || err));
           }
         } else if (action === "view") {
           openLibraryCaseModal(c);
@@ -1563,7 +1640,7 @@
     const authed = await bootstrapAuth();
     if (!authed) await waitForLogin();
 
-    ensureSeeded();
+    await fetchLibrary();
     ensureKnowledgeSuggestCategorySelect();
 
     document.getElementById("tab-generate").addEventListener("click", switchToGenerate);
@@ -1581,7 +1658,7 @@
     }
     updateCategoryHelper();
 
-    document.getElementById("library-form").addEventListener("submit", (e) => {
+    document.getElementById("library-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const lfCat = document.getElementById("lf-category");
       const category = getLibraryCategoryFromForm();
@@ -1605,9 +1682,12 @@
           ? loadLibrary().find((x) => x.id === editingId)?.createdAt || new Date().toISOString()
           : new Date().toISOString(),
       };
-      upsertLibraryCase(entry);
-      resetLibraryForm();
-      renderLibraryList();
+      try {
+        await upsertLibraryCase(entry);
+        resetLibraryForm();
+      } catch (err) {
+        alert("Could not save: " + (err && err.message ? err.message : err));
+      }
     });
 
     document.getElementById("library-form-cancel").addEventListener("click", () => {
@@ -1683,7 +1763,7 @@
       }
     });
 
-    document.getElementById("btn-save-library").addEventListener("click", () => {
+    document.getElementById("btn-save-library").addEventListener("click", async () => {
       const reviewText = document.getElementById("gen-review").value.trim();
       const replyText = genOut.value.trim();
       if (!replyText) return;
@@ -1692,15 +1772,18 @@
       if (genCat && genCat.value && genCat.value.trim()) {
         category = normalizeCategoryValue(genCat.value) || "Other";
       }
-      upsertLibraryCase({
-        id: "case-" + Date.now(),
-        category,
-        reviewText: reviewText || "(no review text)",
-        replyText,
-        createdAt: new Date().toISOString(),
-      });
-      renderLibraryList();
-      switchToLibrary();
+      try {
+        await upsertLibraryCase({
+          id: "case-" + Date.now(),
+          category,
+          reviewText: reviewText || "(no review text)",
+          replyText,
+          createdAt: new Date().toISOString(),
+        });
+        switchToLibrary();
+      } catch (err) {
+        alert("Could not save: " + (err && err.message ? err.message : err));
+      }
     });
 
     const modalRoot = document.getElementById("library-case-modal");
@@ -1751,8 +1834,6 @@
         closeLibraryCaseModal();
       }
     });
-
-    renderLibraryList();
   }
 
   if (document.readyState === "loading") {

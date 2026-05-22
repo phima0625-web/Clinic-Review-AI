@@ -39,24 +39,21 @@ const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const crypto = require("crypto");
-const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
+const {
+  isDbEnabled,
+  loadKnowledge,
+  saveKnowledge,
+  appendKnowledge,
+  loadLibrary,
+  saveLibrary,
+  normalizeKnowledgeCategory,
+  normalizeCaseCategory,
+} = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-/**
- * Persistent clinic knowledge base — Q/A pairs the AI has asked the user about
- * (e.g. general procedure, clinic policy, insurance/billing knowledge). Every
- * future generate-reply call gets these injected as ground-truth context so the
- * model only asks once per topic.
- *
- * Stored as a flat JSON array at `backend/knowledge.json`:
- *   [{ id, question, answer, category, createdAt, updatedAt }]
- *   `category` is always one of the seven Review Library categories.
- */
-const KNOWLEDGE_PATH = path.join(__dirname, "knowledge.json");
 
 /** Must match frontend `script.js` — Review Library and clinic knowledge share these categories only. */
 const LIBRARY_CATEGORY_VALUES = [
@@ -70,90 +67,6 @@ const LIBRARY_CATEGORY_VALUES = [
 ];
 const CATEGORY_VALUE_SET = new Set(LIBRARY_CATEGORY_VALUES);
 
-/**
- * Valid category for a knowledge row, or "Other". For clarifications, `reviewCategoryFallback`
- * is typically `context.category` when the client omits per-row category.
- */
-function normalizeKnowledgeCategory(raw, reviewCategoryFallback) {
-  const s = typeof raw === "string" ? raw.trim() : "";
-  if (CATEGORY_VALUE_SET.has(s)) return s;
-  const fb = reviewCategoryFallback != null ? String(reviewCategoryFallback).trim() : "";
-  if (CATEGORY_VALUE_SET.has(fb)) return fb;
-  return "Other";
-}
-
-function loadKnowledge() {
-  try {
-    if (!fs.existsSync(KNOWLEDGE_PATH)) return [];
-    const raw = fs.readFileSync(KNOWLEDGE_PATH, "utf8");
-    if (!raw.trim()) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((x) => x && typeof x === "object")
-      .map((x) => ({
-        id: x.id != null ? String(x.id) : `kb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        question: typeof x.question === "string" ? x.question : "",
-        answer: typeof x.answer === "string" ? x.answer : "",
-        category: normalizeKnowledgeCategory(x.category, null),
-        createdAt: typeof x.createdAt === "string" ? x.createdAt : new Date().toISOString(),
-        updatedAt: typeof x.updatedAt === "string" ? x.updatedAt : new Date().toISOString(),
-      }))
-      .filter((x) => x.question.trim() && x.answer.trim());
-  } catch (err) {
-    console.warn("knowledge.json read failed; treating as empty:", err && err.message ? err.message : err);
-    return [];
-  }
-}
-
-function saveKnowledge(items) {
-  const safe = Array.isArray(items) ? items : [];
-  try {
-    fs.writeFileSync(KNOWLEDGE_PATH, JSON.stringify(safe, null, 2), "utf8");
-    return true;
-  } catch (err) {
-    console.error("knowledge.json write failed:", err && err.message ? err.message : err);
-    return false;
-  }
-}
-
-/** Merge clarification pairs into the store. Dedupe by lowercased trimmed question. */
-function appendKnowledge(pairs, reviewCategoryFallback) {
-  const incoming = Array.isArray(pairs) ? pairs : [];
-  if (!incoming.length) return loadKnowledge();
-  const current = loadKnowledge();
-  const byKey = new Map();
-  for (const item of current) {
-    byKey.set(String(item.question || "").trim().toLowerCase(), item);
-  }
-  const now = new Date().toISOString();
-  for (const p of incoming) {
-    const q = typeof (p && p.question) === "string" ? p.question.trim() : "";
-    const a = typeof (p && p.answer) === "string" ? p.answer.trim() : "";
-    if (!q || !a) continue;
-    const cat = normalizeKnowledgeCategory(p && p.category, reviewCategoryFallback);
-    const key = q.toLowerCase();
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.answer = a;
-      existing.category = cat;
-      existing.updatedAt = now;
-    } else {
-      byKey.set(key, {
-        id: `kb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        question: q,
-        answer: a,
-        category: cat,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-  }
-  const merged = Array.from(byKey.values()).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-  saveKnowledge(merged);
-  return merged;
-}
-
 function normalizeUserCategoryInput(raw) {
   const s = String(raw || "").trim();
   return CATEGORY_VALUE_SET.has(s) ? s : null;
@@ -162,25 +75,6 @@ function normalizeUserCategoryInput(raw) {
 function sameCategoryAsReviewerBonus(userCategory, c) {
   if (!userCategory) return 0;
   return normalizeCaseCategory(c) === userCategory ? 6 : 0;
-}
-
-const LEGACY_TAG_TO_CATEGORY = {
-  Billing: "Billing / Insurance",
-  Provider: "Provider interaction",
-  Flow: "Wait time / Scheduling",
-  Referral: "Referral / Orders",
-  Staff: "Front desk / Staff",
-};
-
-function normalizeCaseCategory(c) {
-  const direct = String((c && c.category) || "").trim();
-  if (CATEGORY_VALUE_SET.has(direct)) return direct;
-  const fromTitle = String((c && c.title) || "").trim();
-  if (CATEGORY_VALUE_SET.has(fromTitle)) return fromTitle;
-  for (const tag of (c && c.tags) || []) {
-    if (LEGACY_TAG_TO_CATEGORY[tag]) return LEGACY_TAG_TO_CATEGORY[tag];
-  }
-  return "Other";
 }
 
 function categoryOverlapBonus(queryTokens, category) {
@@ -1091,6 +985,7 @@ app.get("/", (req, res) => {
     message: "Clinic Review AI backend. POST /generate-reply, /suggest-knowledge-from-case",
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
     authRequired: authEnabled(),
+    dbEnabled: isDbEnabled(),
   });
 });
 
@@ -1114,15 +1009,19 @@ app.post("/auth/login", (req, res) => {
   return res.status(401).json({ error: "Invalid username or password." });
 });
 
-app.get("/knowledge", requireAuth, (req, res) => {
-  res.json({ items: loadKnowledge() });
+app.get("/knowledge", requireAuth, async (req, res) => {
+  try {
+    res.json({ items: await loadKnowledge() });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load knowledge." });
+  }
 });
 
 /**
  * Replace the entire knowledge list. Used by the UI for Add/Edit/Delete.
  * Body: { items: [{ id?, question, answer, category, createdAt?, updatedAt? }] }
  */
-app.put("/knowledge", requireAuth, (req, res) => {
+app.put("/knowledge", requireAuth, async (req, res) => {
   const { items } = req.body || {};
   if (!Array.isArray(items)) {
     return res.status(400).json({ error: "Field 'items' must be an array." });
@@ -1143,11 +1042,66 @@ app.put("/knowledge", requireAuth, (req, res) => {
       updatedAt: now,
     });
   }
-  const ok = saveKnowledge(cleaned);
-  if (!ok) {
-    return res.status(500).json({ error: "Failed to write knowledge.json on the server." });
+  try {
+    const ok = await saveKnowledge(cleaned);
+    if (!ok) {
+      return res.status(500).json({ error: "Failed to save clinic knowledge." });
+    }
+    res.json({ items: cleaned });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to save knowledge." });
   }
-  res.json({ items: cleaned });
+});
+
+app.get("/library", requireAuth, async (req, res) => {
+  try {
+    if (!isDbEnabled()) {
+      return res.status(503).json({
+        error: "Review library requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+      });
+    }
+    res.json({ items: await loadLibrary() });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load library." });
+  }
+});
+
+/**
+ * Replace the entire review library. Body: { items: [{ id?, category, reviewText, contextText?, replyText, createdAt? }] }
+ */
+app.put("/library", requireAuth, async (req, res) => {
+  if (!isDbEnabled()) {
+    return res.status(503).json({
+      error: "Review library requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    });
+  }
+  const { items } = req.body || {};
+  if (!Array.isArray(items)) {
+    return res.status(400).json({ error: "Field 'items' must be an array." });
+  }
+  const cleaned = [];
+  for (const it of items) {
+    if (!it || typeof it !== "object") continue;
+    const replyText = typeof it.replyText === "string" ? it.replyText.trim() : "";
+    if (!replyText) continue;
+    cleaned.push({
+      id: typeof it.id === "string" && it.id ? it.id : `case-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      category: normalizeCaseCategory(it),
+      reviewText: typeof it.reviewText === "string" ? it.reviewText.trim() : "",
+      contextText: typeof it.contextText === "string" ? it.contextText.trim() : "",
+      replyText,
+      createdAt: typeof it.createdAt === "string" ? it.createdAt : new Date().toISOString(),
+    });
+  }
+  try {
+    const ok = await saveLibrary(cleaned);
+    if (!ok) {
+      return res.status(500).json({ error: "Failed to save review library." });
+    }
+    res.json({ items: cleaned });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to save library." });
+  }
 });
 
 /**
@@ -1228,7 +1182,11 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Field 'context.category' must be a string when provided." });
   }
 
-  const library = Array.isArray(pastCases) ? pastCases : [];
+  const library = isDbEnabled()
+    ? await loadLibrary()
+    : Array.isArray(pastCases)
+      ? pastCases
+      : [];
   const situation =
     context && typeof context.situation === "string" ? context.situation : "";
   const reviewCategory =
@@ -1254,7 +1212,7 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
     reviewCategory
   );
 
-  const savedKnowledgeBefore = loadKnowledge();
+  const savedKnowledgeBefore = await loadKnowledge();
   const knowledgeBundle = buildKnowledgeBlock(savedKnowledgeBefore, cleanClarifications, reviewCategory);
   const prompt = buildGeminiPrompt(
     review,
@@ -1316,7 +1274,7 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
       }
       let savedKnowledgeAfter = savedKnowledgeBefore;
       if (cleanClarifications.length) {
-        savedKnowledgeAfter = appendKnowledge(cleanClarifications, reviewCategory);
+        savedKnowledgeAfter = await appendKnowledge(cleanClarifications, reviewCategory);
       }
       return res.json({
         status: "reply",
@@ -1354,7 +1312,7 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
 
     let savedKnowledgeAfter = savedKnowledgeBefore;
     if (cleanClarifications.length) {
-      savedKnowledgeAfter = appendKnowledge(cleanClarifications, reviewCategory);
+      savedKnowledgeAfter = await appendKnowledge(cleanClarifications, reviewCategory);
     }
 
     const transparency = {
@@ -1391,8 +1349,15 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Clinic Review AI backend: http://localhost:${PORT}`);
   console.log(
-    "Routes: GET /, GET /auth/config, POST /auth/login, GET/PUT /knowledge, POST /generate-reply, POST /suggest-knowledge-from-case"
+    "Routes: GET /, GET /auth/config, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /generate-reply, POST /suggest-knowledge-from-case"
   );
+  if (isDbEnabled()) {
+    console.log("Storage: Supabase (clinic_knowledge + review_library).");
+  } else {
+    console.warn(
+      "Storage: knowledge.json file only. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for persistent cloud storage."
+    );
+  }
   if (authEnabled()) {
     console.log("App login: enabled (APP_USERNAME / APP_PASSWORD / APP_SESSION_SECRET).");
   } else {

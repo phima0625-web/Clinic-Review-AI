@@ -32,7 +32,7 @@
         <h1>Clinic Review AI Assistant</h1>
         <button type="button" class="btn btn-logout" id="btn-logout" hidden>Sign out</button>
       </div>
-      <p class="subtitle">Prototype — library in your browser (<code>localStorage</code>: <code>clinicReviewLibrary_v1</code>). Start the <code>backend</code> server for <strong>Generate reply</strong> (see help below).</p>
+      <p class="subtitle">Review library and clinic knowledge are stored in Supabase when configured (shared across staff). Without Supabase, the library falls back to this browser only.</p>
     </header>
 
     <nav class="tabs" role="tablist">
@@ -124,7 +124,7 @@
         <div class="stack">
           <div class="card knowledge-card">
             <h2>Clinic knowledge</h2>
-            <p class="hint">Saved Q/A by <strong>the same seven categories</strong> as Review Library (server <code>backend/knowledge.json</code>). When you pick a review category on Generate, the model receives knowledge in that category plus “Other” general entries. Add, edit, or delete here. <strong>Transparency</strong> summarizes what was injected and which entries the model cited.</p>
+            <p class="hint">Saved Q/A by <strong>the same seven categories</strong> as Review Library (stored in <strong>Supabase</strong> when configured). When you pick a review category on Generate, the model receives knowledge in that category plus “Other” general entries. Add, edit, or delete here. <strong>Transparency</strong> summarizes what was injected and which entries the model cited.</p>
             <div class="kb-toolbar">
               <input type="search" id="kb-search" placeholder="Search saved knowledge…" />
               <button type="button" id="kb-add" class="btn">Add entry</button>
@@ -139,7 +139,7 @@
           <div class="card">
             <h2 id="library-form-title">Add to library</h2>
             <p class="hint library-form-intro">
-              Save real examples so the app can match tone, policies, and how you handled similar situations. Nothing here is sent to the internet except when you generate a reply (then only the top few similar rows go to Gemini, with your API key on the server).
+              Save real examples so the app can match tone, policies, and how you handled similar situations. Stored in <strong>Supabase</strong> (shared with all staff) when the backend is configured; otherwise only in this browser.
             </p>
             <form id="library-form">
               <input type="hidden" id="lf-editing-id" value="" />
