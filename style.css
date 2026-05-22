@@ -148,8 +148,10 @@ textarea {
 }
 
 textarea {
-  resize: vertical;
-  min-height: 4rem;
+  resize: none;
+  overflow-y: hidden;
+  min-height: 2.5rem;
+  field-sizing: content;
 }
 
 /* Suggested reply & any textarea direct child of a card */
@@ -602,8 +604,7 @@ textarea {
 }
 
 .clarify-q textarea {
-  resize: vertical;
-  min-height: 64px;
+  min-height: 2.5rem;
 }
 
 .knowledge-card .kb-toolbar {
@@ -717,7 +718,7 @@ textarea {
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
-  resize: vertical;
+  resize: none;
 }
 
 .kb-empty {
@@ -813,12 +814,6 @@ body.app--user .user-only {
 
 body.app--user .user-only.hint {
   display: block;
-}
-
-body.app--user .app {
-  max-width: 42rem;
-  margin-left: auto;
-  margin-right: auto;
 }
 
 body.app--user .app-header {

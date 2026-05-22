@@ -16,6 +16,24 @@
   let loginWaiters = [];
   let currentRole = "admin";
 
+  function autoResizeTextarea(el) {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }
+
+  function refreshTextareaHeights(root) {
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll("textarea").forEach(autoResizeTextarea);
+  }
+
+  function wireTextareaAutoGrow() {
+    document.addEventListener("input", (e) => {
+      if (e.target && e.target.tagName === "TEXTAREA") autoResizeTextarea(e.target);
+    });
+    refreshTextareaHeights();
+  }
+
   function getAuthToken() {
     try {
       return sessionStorage.getItem(AUTH_STORAGE_KEY) || "";
@@ -861,7 +879,7 @@
       label.className = "clarify-q-label";
       label.textContent = `${i + 1}. ${q}`;
       const ta = document.createElement("textarea");
-      ta.rows = 3;
+      ta.rows = 1;
       ta.placeholder = "Your answer for staff/clinic records (policy or how you operate — saved to clinic knowledge)…";
       ta.dataset.question = q;
       label.appendChild(ta);
@@ -871,6 +889,7 @@
     });
     card.hidden = false;
     if (rows[0]) rows[0].focus();
+    refreshTextareaHeights(form);
 
     return new Promise((resolve) => {
       function cleanup() {
@@ -1009,7 +1028,7 @@
         const aLbl = document.createElement("label");
         aLbl.appendChild(document.createTextNode("Answer"));
         const aInput = document.createElement("textarea");
-        aInput.rows = 3;
+        aInput.rows = 1;
         aInput.value = it.answer || "";
         aLbl.appendChild(aInput);
         formEl.appendChild(aLbl);
@@ -1105,6 +1124,7 @@
 
       list.appendChild(row);
     });
+    refreshTextareaHeights(list);
   }
 
   function startKnowledgeAdd() {
@@ -1306,6 +1326,7 @@
       qEl.value = data.question || "";
       aEl.value = data.answer || "";
       if (data.category) catEl.value = coerceCategory(data.category);
+      refreshTextareaHeights(root);
       status.textContent = "Review and edit below, then click Add to clinic knowledge.";
       saveBtn.disabled = false;
     } catch (err) {
@@ -1629,6 +1650,7 @@
           const lfCtx = document.getElementById("lf-context");
           if (lfCtx) lfCtx.value = c.contextText || "";
           document.getElementById("lf-reply").value = c.replyText;
+          refreshTextareaHeights(document.getElementById("library-form"));
           document.getElementById("library-form-title").textContent = "Edit library case";
           document.getElementById("library-form-submit").textContent = "Update";
           document.getElementById("library-form-cancel").hidden = false;
@@ -1645,6 +1667,7 @@
           if (sit) sit.value = (c.contextText || "").trim();
           const gcat = document.getElementById("gen-category");
           if (gcat) gcat.value = coerceCategory(c.category);
+          refreshTextareaHeights(document.getElementById("panel-generate"));
         }
       });
     });
@@ -1698,6 +1721,7 @@
     document.getElementById("library-form-title").textContent = "Add to library";
     document.getElementById("library-form-submit").textContent = "Save";
     document.getElementById("library-form-cancel").hidden = true;
+    refreshTextareaHeights(document.getElementById("library-form"));
   }
 
   async function init() {
@@ -1766,6 +1790,7 @@
 
     async function runGenerateFlow(reviewText, lib) {
       genOut.value = "";
+      autoResizeTextarea(genOut);
       genOut.readOnly = true;
       document.getElementById("btn-copy").disabled = true;
       document.getElementById("btn-save-library").disabled = true;
@@ -1791,6 +1816,7 @@
 
         genOut.value = result.reply || "";
         genOut.readOnly = false;
+        autoResizeTextarea(genOut);
         lastTransparency = result.transparency || lastQuestionsTransparency;
         if (isAdminRole()) {
           renderTransparency("gen-transparency-matches", lastTransparency || result.transparency);
@@ -1906,6 +1932,8 @@
         closeLibraryCaseModal();
       }
     });
+
+    wireTextareaAutoGrow();
   }
 
   if (document.readyState === "loading") {
