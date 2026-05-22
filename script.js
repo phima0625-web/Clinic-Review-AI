@@ -861,16 +861,25 @@
 
   let knowledgeCache = [];
   let knowledgeEditingId = null;
+  let knowledgeLoadError = "";
 
   async function fetchKnowledge() {
+    knowledgeLoadError = "";
     try {
       const res = await apiFetch("/knowledge");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
       const data = await res.json().catch(() => ({}));
       knowledgeCache = Array.isArray(data.items) ? data.items : [];
     } catch (err) {
+      if (err && err.message === "Login required") return;
       console.warn("Could not load clinic knowledge — backend may be off.", err);
       knowledgeCache = [];
+      knowledgeLoadError =
+        (err && err.message) ||
+        "Could not load clinic knowledge from the server.";
     }
     renderKnowledge();
   }
@@ -904,10 +913,12 @@
 
     if (!items.length) {
       const empty = document.createElement("p");
-      empty.className = "kb-empty";
-      empty.textContent = q
-        ? "No saved entries match that search."
-        : "No clinic knowledge saved yet. The AI will ask you when it needs facts; your answers are stored here.";
+      empty.className = knowledgeLoadError ? "kb-empty hint-error" : "kb-empty";
+      empty.textContent = knowledgeLoadError
+        ? knowledgeLoadError
+        : q
+          ? "No saved entries match that search."
+          : "No clinic knowledge saved yet. The AI will ask you when it needs facts; your answers are stored here.";
       list.appendChild(empty);
       return;
     }
