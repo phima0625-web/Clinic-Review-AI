@@ -38,6 +38,7 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
+const crypto = require("crypto");
 const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
@@ -331,6 +332,45 @@ const MAX_SIMILAR_CASES = 5;
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cors());
+
+/** Shared login — set APP_USERNAME, APP_PASSWORD, and APP_SESSION_SECRET in .env (or Render env). */
+function authEnabled() {
+  const u = process.env.APP_USERNAME && String(process.env.APP_USERNAME).trim();
+  const p = process.env.APP_PASSWORD && String(process.env.APP_PASSWORD).trim();
+  const s = process.env.APP_SESSION_SECRET && String(process.env.APP_SESSION_SECRET).trim();
+  return Boolean(u && p && s);
+}
+
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function createSessionToken() {
+  const secret = String(process.env.APP_SESSION_SECRET).trim();
+  const exp = Date.now() + SESSION_TTL_MS;
+  const payload = `session:${exp}`;
+  const sig = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  return `${payload}.${sig}`;
+}
+
+function verifySessionToken(token) {
+  if (!authEnabled() || !token) return false;
+  const parts = String(token).split(".");
+  if (parts.length !== 2) return false;
+  const [payload, sig] = parts;
+  const secret = String(process.env.APP_SESSION_SECRET).trim();
+  const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  if (sig.length !== expected.length || sig !== expected) return false;
+  const m = payload.match(/^session:(\d+)$/);
+  if (!m) return false;
+  return Date.now() < Number(m[1]);
+}
+
+function requireAuth(req, res, next) {
+  if (!authEnabled()) return next();
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  if (verifySessionToken(token)) return next();
+  return res.status(401).json({ error: "Login required." });
+}
 
 let genaiModulePromise = null;
 function loadGenAi() {
@@ -1050,10 +1090,31 @@ app.get("/", (req, res) => {
     ok: true,
     message: "Clinic Review AI backend. POST /generate-reply, /suggest-knowledge-from-case",
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    authRequired: authEnabled(),
   });
 });
 
-app.get("/knowledge", (req, res) => {
+app.get("/auth/config", (req, res) => {
+  res.json({ authRequired: authEnabled() });
+});
+
+app.post("/auth/login", (req, res) => {
+  if (!authEnabled()) {
+    return res.json({ ok: true, authRequired: false });
+  }
+  const { username, password } = req.body || {};
+  const u = String(username || "").trim();
+  const p = String(password || "");
+  if (
+    u === String(process.env.APP_USERNAME).trim() &&
+    p === String(process.env.APP_PASSWORD)
+  ) {
+    return res.json({ ok: true, authRequired: true, token: createSessionToken() });
+  }
+  return res.status(401).json({ error: "Invalid username or password." });
+});
+
+app.get("/knowledge", requireAuth, (req, res) => {
   res.json({ items: loadKnowledge() });
 });
 
@@ -1061,7 +1122,7 @@ app.get("/knowledge", (req, res) => {
  * Replace the entire knowledge list. Used by the UI for Add/Edit/Delete.
  * Body: { items: [{ id?, question, answer, category, createdAt?, updatedAt? }] }
  */
-app.put("/knowledge", (req, res) => {
+app.put("/knowledge", requireAuth, (req, res) => {
   const { items } = req.body || {};
   if (!Array.isArray(items)) {
     return res.status(400).json({ error: "Field 'items' must be an array." });
@@ -1093,7 +1154,7 @@ app.put("/knowledge", (req, res) => {
  * Body: { libraryCase: { category?, reviewText?, contextText?, replyText } }
  * Uses Gemini to suggest one Q/A; **answer** is derived from the published reply. Client reviews before PUT /knowledge.
  */
-app.post("/suggest-knowledge-from-case", async (req, res) => {
+app.post("/suggest-knowledge-from-case", requireAuth, async (req, res) => {
   const libCase = req.body && req.body.libraryCase;
   if (!libCase || typeof libCase !== "object") {
     return res.status(400).json({ error: "Field 'libraryCase' must be an object." });
@@ -1143,7 +1204,7 @@ app.post("/suggest-knowledge-from-case", async (req, res) => {
 });
 
 
-app.post("/generate-reply", async (req, res) => {
+app.post("/generate-reply", requireAuth, async (req, res) => {
   const { review, context, pastCases, clarifications, round } = req.body || {};
 
   if (review !== undefined && typeof review !== "string") {
@@ -1330,8 +1391,15 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Clinic Review AI backend: http://localhost:${PORT}`);
   console.log(
-    "Routes: GET /, GET/PUT /knowledge, POST /generate-reply, POST /suggest-knowledge-from-case"
+    "Routes: GET /, GET /auth/config, POST /auth/login, GET/PUT /knowledge, POST /generate-reply, POST /suggest-knowledge-from-case"
   );
+  if (authEnabled()) {
+    console.log("App login: enabled (APP_USERNAME / APP_PASSWORD / APP_SESSION_SECRET).");
+  } else {
+    console.warn(
+      "Optional: set APP_USERNAME, APP_PASSWORD, and APP_SESSION_SECRET in .env to require login."
+    );
+  }
   console.log(`Gemini model: ${GEMINI_MODEL}`);
   if (clinicPublicPhoneFromEnv() || clinicOperationsEmailFromEnv()) {
     const parts = [];

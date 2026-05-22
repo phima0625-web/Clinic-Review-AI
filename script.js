@@ -9,6 +9,170 @@
    * This file never contains or sends your API key — only review/context/pastCases.
    */
   const API_BASE_URL = "https://clinic-review-ai.onrender.com";
+  const AUTH_STORAGE_KEY = "clinicReviewAuthToken_v1";
+
+  let authRequired = false;
+  let loginWaiters = [];
+
+  function getAuthToken() {
+    try {
+      return sessionStorage.getItem(AUTH_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function setAuthToken(token) {
+    try {
+      if (token) sessionStorage.setItem(AUTH_STORAGE_KEY, token);
+      else sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function showLoginScreen(message) {
+    const screen = document.getElementById("login-screen");
+    const err = document.getElementById("login-error");
+    const logout = document.getElementById("btn-logout");
+    if (screen) screen.hidden = false;
+    if (logout) logout.hidden = true;
+    if (err) {
+      if (message) {
+        err.textContent = message;
+        err.hidden = false;
+      } else {
+        err.textContent = "";
+        err.hidden = true;
+      }
+    }
+  }
+
+  function hideLoginScreen() {
+    const screen = document.getElementById("login-screen");
+    const err = document.getElementById("login-error");
+    const logout = document.getElementById("btn-logout");
+    if (screen) screen.hidden = true;
+    if (err) err.hidden = true;
+    if (logout) logout.hidden = !authRequired;
+  }
+
+  function resolveLoginWaiters() {
+    loginWaiters.forEach((fn) => fn());
+    loginWaiters = [];
+  }
+
+  function waitForLogin() {
+    return new Promise((resolve) => {
+      loginWaiters.push(resolve);
+    });
+  }
+
+  async function apiFetch(path, options) {
+    const opts = options || {};
+    const headers = Object.assign({}, opts.headers || {});
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE_URL}${path}`, Object.assign({}, opts, { headers }));
+    if (res.status === 401) {
+      setAuthToken("");
+      showLoginScreen("Session expired. Please sign in again.");
+      throw new Error("Login required");
+    }
+    return res;
+  }
+
+  async function bootstrapAuth() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/config`);
+      const data = await res.json().catch(() => ({}));
+      authRequired = Boolean(data.authRequired);
+    } catch {
+      authRequired = false;
+      return false;
+    }
+
+    if (!authRequired) {
+      hideLoginScreen();
+      return true;
+    }
+
+    const token = getAuthToken();
+    if (token) {
+      try {
+        const res = await apiFetch("/knowledge");
+        if (res.ok) {
+          hideLoginScreen();
+          return true;
+        }
+      } catch {
+        /* show login below */
+      }
+    }
+
+    showLoginScreen();
+    return false;
+  }
+
+  async function submitLogin() {
+    const userEl = document.getElementById("login-username");
+    const passEl = document.getElementById("login-password");
+    const err = document.getElementById("login-error");
+    const btn = document.getElementById("login-submit");
+    if (!userEl || !passEl || !btn) return;
+
+    const username = userEl.value.trim();
+    const password = passEl.value;
+    if (!username || !password) {
+      if (err) {
+        err.textContent = "Enter username and password.";
+        err.hidden = false;
+      }
+      return;
+    }
+
+    btn.disabled = true;
+    if (err) err.hidden = true;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (err) {
+          err.textContent = data.error || "Invalid username or password.";
+          err.hidden = false;
+        }
+        return;
+      }
+      if (data.token) setAuthToken(data.token);
+      passEl.value = "";
+      hideLoginScreen();
+      resolveLoginWaiters();
+      fetchKnowledge();
+    } catch {
+      if (err) {
+        err.textContent = "Could not reach the server. Try again in a moment.";
+        err.hidden = false;
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function wireAuthUi() {
+    document.getElementById("login-submit")?.addEventListener("click", submitLogin);
+    document.getElementById("login-password")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitLogin();
+    });
+    document.getElementById("btn-logout")?.addEventListener("click", () => {
+      setAuthToken("");
+      showLoginScreen();
+    });
+  }
 
   const LIBRARY_CATEGORY_VALUES = [
     "Treatment / Care quality",
@@ -474,7 +638,7 @@
     };
 
     try {
-      const res = await fetch(`${API_BASE_URL}/generate-reply`, {
+      const res = await apiFetch("/generate-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -504,6 +668,9 @@
         transparency,
       };
     } catch (err) {
+      if (err && err.message === "Login required") {
+        throw err;
+      }
       console.warn("Backend unreachable or error — using local prototype.", err);
       const offline = generateReplyPrototype(reviewText, situation, library, category);
       return { status: "reply", reply: offline.reply, transparency: offline.transparency };
@@ -603,7 +770,7 @@
 
   async function fetchKnowledge() {
     try {
-      const res = await fetch(`${API_BASE_URL}/knowledge`);
+      const res = await apiFetch("/knowledge");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json().catch(() => ({}));
       knowledgeCache = Array.isArray(data.items) ? data.items : [];
@@ -615,7 +782,7 @@
   }
 
   async function saveKnowledgeRemote(items) {
-    const res = await fetch(`${API_BASE_URL}/knowledge`, {
+    const res = await apiFetch("/knowledge", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
@@ -959,7 +1126,7 @@
     };
 
     try {
-      const res = await fetch(`${API_BASE_URL}/suggest-knowledge-from-case`, {
+      const res = await apiFetch("/suggest-knowledge-from-case", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1375,7 +1542,11 @@
     document.getElementById("library-form-cancel").hidden = true;
   }
 
-  function init() {
+  async function init() {
+    wireAuthUi();
+    const authed = await bootstrapAuth();
+    if (!authed) await waitForLogin();
+
     ensureSeeded();
     ensureKnowledgeSuggestCategorySelect();
 
@@ -1471,7 +1642,10 @@
       const lib = loadLibrary();
       const btn = document.getElementById("btn-generate");
       btn.disabled = true;
-      runGenerateFlow(reviewText, lib).finally(() => {
+      runGenerateFlow(reviewText, lib).catch((err) => {
+        if (err && err.message === "Login required") return;
+        console.error(err);
+      }).finally(() => {
         btn.disabled = false;
       });
     });
@@ -1566,8 +1740,10 @@
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", () => {
+      init().catch((err) => console.error(err));
+    });
   } else {
-    init();
+    init().catch((err) => console.error(err));
   }
 })();

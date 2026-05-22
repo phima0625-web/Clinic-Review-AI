@@ -729,3 +729,47 @@ textarea {
 #knowledge-suggest-modal.case-modal-root {
   z-index: 1001;
 }
+
+.app-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.app-header-row h1 {
+  margin: 0 0 0.35rem;
+}
+
+.btn-logout {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.75rem;
+}
+
+.login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(26, 43, 60, 0.45);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  margin: 0;
+}
+
+.login-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  color: var(--primary);
+}
+
+.login-card .actions {
+  margin-top: 0.75rem;
+}
