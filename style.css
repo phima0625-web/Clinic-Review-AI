@@ -754,8 +754,21 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
-  background: rgba(26, 43, 60, 0.45);
+  padding: 1.5rem;
+  background: var(--bg);
+}
+
+.login-screen[hidden] {
+  display: none !important;
+}
+
+body.auth-pending .app {
+  visibility: hidden;
+  pointer-events: none;
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 .login-card {

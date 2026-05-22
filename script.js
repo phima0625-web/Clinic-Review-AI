@@ -31,10 +31,23 @@
     }
   }
 
+  function lockApp() {
+    document.body.classList.add("auth-pending");
+    const app = document.querySelector(".app");
+    if (app) app.setAttribute("aria-hidden", "true");
+  }
+
+  function revealApp() {
+    document.body.classList.remove("auth-pending");
+    const app = document.querySelector(".app");
+    if (app) app.removeAttribute("aria-hidden");
+  }
+
   function showLoginScreen(message) {
     const screen = document.getElementById("login-screen");
     const err = document.getElementById("login-error");
     const logout = document.getElementById("btn-logout");
+    lockApp();
     if (screen) screen.hidden = false;
     if (logout) logout.hidden = true;
     if (err) {
@@ -55,6 +68,7 @@
     if (screen) screen.hidden = true;
     if (err) err.hidden = true;
     if (logout) logout.hidden = !authRequired;
+    revealApp();
   }
 
   function resolveLoginWaiters() {
@@ -83,13 +97,15 @@
   }
 
   async function bootstrapAuth() {
+    lockApp();
     try {
       const res = await fetch(`${API_BASE_URL}/auth/config`);
       const data = await res.json().catch(() => ({}));
       authRequired = Boolean(data.authRequired);
     } catch {
       authRequired = false;
-      return false;
+      hideLoginScreen();
+      return true;
     }
 
     if (!authRequired) {
