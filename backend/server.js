@@ -48,8 +48,11 @@ const {
   appendKnowledge,
   loadLibrary,
   saveLibrary,
+  appendLibraryCase,
+  cleanLibraryItem,
   normalizeKnowledgeCategory,
   normalizeCaseCategory,
+  normalizeCaseCategories,
 } = require("./db");
 
 const app = express();
@@ -72,9 +75,21 @@ function normalizeUserCategoryInput(raw) {
   return CATEGORY_VALUE_SET.has(s) ? s : null;
 }
 
+function getCaseCategories(c) {
+  if (c && Array.isArray(c.categories) && c.categories.length) {
+    return normalizeCaseCategories(c);
+  }
+  return [normalizeCaseCategory(c)];
+}
+
+function caseHasCategory(c, userCat) {
+  if (!userCat) return false;
+  return getCaseCategories(c).includes(userCat);
+}
+
 function sameCategoryAsReviewerBonus(userCategory, c) {
   if (!userCategory) return 0;
-  return normalizeCaseCategory(c) === userCategory ? 6 : 0;
+  return caseHasCategory(c, userCategory) ? 6 : 0;
 }
 
 function categoryOverlapBonus(queryTokens, category) {
@@ -88,6 +103,14 @@ function categoryOverlapBonus(queryTokens, category) {
       catToks.some((ct) => ct === qt || (qt.length > 2 && (ct.includes(qt) || qt.includes(ct))))
   );
   return hit ? 3 : 0;
+}
+
+function caseCategoryOverlapBonus(queryTokens, c) {
+  let max = 0;
+  for (const cat of getCaseCategories(c)) {
+    max = Math.max(max, categoryOverlapBonus(queryTokens, cat));
+  }
+  return max;
 }
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
@@ -334,7 +357,7 @@ function scoreCase(queryTokens, c, userCategory) {
     if (replyTokens.has(t)) score += 1;
     if (contextTokens.has(t)) score += 1;
   }
-  score += categoryOverlapBonus(queryTokens, normalizeCaseCategory(c));
+  score += caseCategoryOverlapBonus(queryTokens, c);
   score += sameCategoryAsReviewerBonus(userCategory, c);
   return score;
 }
@@ -374,10 +397,9 @@ function caseSelectionRationale(matchingText, c, score, userCategory, selectionT
   const kind = selectionType || "GENERAL";
   const lead = [];
   if (kind === "SAME_CATEGORY" && userCat) {
+    const tags = getCaseCategories(c).join(" · ");
     lead.push(
-      `SAME CATEGORY — this library case is tagged “${normalizeCaseCategory(
-        c
-      )}”, matching the category you selected for this new review (“${userCat}”). Within that group it ranked by text similarity to your review and notes.`
+      `SAME CATEGORY — this library case is tagged “${tags}”, matching the category you selected for this new review (“${userCat}”). Within that group it ranked by text similarity to your review and notes.`
     );
   } else if (kind === "FALLBACK" && userCat) {
     lead.push(
@@ -398,8 +420,8 @@ function caseSelectionRationale(matchingText, c, score, userCategory, selectionT
   const shared = queryTokens.filter(
     (t) => reviewTokens.has(t) || replyTokens.has(t) || contextTokens.has(t)
   );
-  const cat = normalizeCaseCategory(c);
-  const catBonus = categoryOverlapBonus(queryTokens, cat);
+  const catTags = getCaseCategories(c);
+  const catBonus = caseCategoryOverlapBonus(queryTokens, c);
   const sameCatBonus = sameCategoryAsReviewerBonus(userCat, c);
   const parts = [...lead];
   if (shared.length) {
@@ -410,7 +432,7 @@ function caseSelectionRationale(matchingText, c, score, userCategory, selectionT
     );
   }
   if (catBonus > 0) {
-    parts.push(`Category/theme overlap: “${cat}” aligns with words in your new review or notes (+3).`);
+    parts.push(`Category/theme overlap: “${catTags.join(" · ")}” aligns with words in your new review or notes (+3).`);
   }
   if (sameCatBonus > 0 && userCat) {
     parts.push(`Score includes +6 because this row’s category matches what you selected for this review.`);
@@ -453,8 +475,8 @@ function pickCasesForGemini(reviewText, situation, pastCases, userCategory) {
   /** Tiered pick: same category first (ranked by similarity), then fill with best other-category matches. */
   let top = [];
   if (userCat) {
-    const sameCatLib = library.filter((c) => normalizeCaseCategory(c) === userCat);
-    const otherLib = library.filter((c) => normalizeCaseCategory(c) !== userCat);
+    const sameCatLib = library.filter((c) => caseHasCategory(c, userCat));
+    const otherLib = library.filter((c) => !caseHasCategory(c, userCat));
     const rankedSame = findSimilarCases(matchingText, sameCatLib, sameCatLib.length, userCat);
     const rankedOther = findSimilarCases(matchingText, otherLib, otherLib.length, userCat);
     for (let i = 0; i < rankedSame.length && top.length < n; i++) {
@@ -474,11 +496,13 @@ function pickCasesForGemini(reviewText, situation, pastCases, userCategory) {
   const fallbackCount = top.filter((t) => t.selectionType === "FALLBACK").length;
 
   const selectedCasesMeta = top.map(({ case: c, score, selectionType }) => {
-    const category = normalizeCaseCategory(c);
+    const categories = getCaseCategories(c);
+    const category = categories[0];
     return {
       id: c.id != null ? String(c.id) : "",
       category,
-      title: category,
+      categories,
+      title: categories.join(" · "),
       score,
       selectionType,
       selectedReviewCategory: userCat || "",
@@ -492,7 +516,7 @@ function pickCasesForGemini(reviewText, situation, pastCases, userCategory) {
 
   let selectionSummary = "";
   if (userCat) {
-    const inPool = library.filter((c) => normalizeCaseCategory(c) === userCat).length;
+    const inPool = library.filter((c) => caseHasCategory(c, userCat)).length;
     if (inPool === 0) {
       selectionSummary =
         `You categorized this review as “${userCat}”, but no library cases use that category. ` +
@@ -1147,17 +1171,8 @@ app.put("/library", requireAuth, requireAdmin, async (req, res) => {
   }
   const cleaned = [];
   for (const it of items) {
-    if (!it || typeof it !== "object") continue;
-    const replyText = typeof it.replyText === "string" ? it.replyText.trim() : "";
-    if (!replyText) continue;
-    cleaned.push({
-      id: typeof it.id === "string" && it.id ? it.id : `case-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      category: normalizeCaseCategory(it),
-      reviewText: typeof it.reviewText === "string" ? it.reviewText.trim() : "",
-      contextText: typeof it.contextText === "string" ? it.contextText.trim() : "",
-      replyText,
-      createdAt: typeof it.createdAt === "string" ? it.createdAt : new Date().toISOString(),
-    });
+    const item = cleanLibraryItem(it);
+    if (item) cleaned.push(item);
   }
   try {
     const ok = await saveLibrary(cleaned);
@@ -1167,6 +1182,41 @@ app.put("/library", requireAuth, requireAdmin, async (req, res) => {
     res.json({ items: cleaned });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to save library." });
+  }
+});
+
+/**
+ * Append one library case (staff or admin). Body: { reviewText?, contextText?, categories[], replyText }
+ */
+app.post("/library/cases", requireAuth, async (req, res) => {
+  if (!isDbEnabled()) {
+    return res.status(503).json({
+      error: "Review library requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    });
+  }
+  const body = req.body || {};
+  const categories = body.categories;
+  if (!Array.isArray(categories) || categories.length === 0) {
+    return res.status(400).json({ error: "Field 'categories' must be a non-empty array." });
+  }
+  const normalizedCats = normalizeCaseCategories({ categories });
+  if (!normalizedCats.length) {
+    return res.status(400).json({ error: "At least one valid category is required." });
+  }
+  try {
+    const item = await appendLibraryCase({
+      reviewText: body.reviewText,
+      contextText: body.contextText,
+      categories: normalizedCats,
+      replyText: body.replyText,
+    });
+    res.json({ ok: true, item });
+  } catch (err) {
+    const msg = err.message || "Failed to save case.";
+    if (msg.includes("replyText")) {
+      return res.status(400).json({ error: "Field 'replyText' is required." });
+    }
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -1415,7 +1465,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Clinic Review AI backend: http://localhost:${PORT}`);
   console.log(
-    "Routes: GET /, GET /auth/config, GET /auth/me, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /generate-reply, POST /suggest-knowledge-from-case"
+    "Routes: GET /, GET /auth/config, GET /auth/me, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /library/cases, POST /generate-reply, POST /suggest-knowledge-from-case"
   );
   if (isDbEnabled()) {
     console.log("Storage: Supabase (clinic_knowledge + review_library).");

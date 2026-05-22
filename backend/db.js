@@ -68,6 +68,42 @@ function normalizeCaseCategory(c) {
   return "Other";
 }
 
+/** Normalize to a non-empty array of valid library categories. */
+function normalizeCaseCategories(raw) {
+  if (raw && Array.isArray(raw.categories) && raw.categories.length) {
+    const seen = new Set();
+    const out = [];
+    for (const item of raw.categories) {
+      const s = typeof item === "string" ? item.trim() : "";
+      if (CATEGORY_VALUE_SET.has(s) && !seen.has(s)) {
+        seen.add(s);
+        out.push(s);
+      }
+    }
+    if (out.length) return out;
+  }
+  return [normalizeCaseCategory(raw)];
+}
+
+function cleanLibraryItem(it) {
+  if (!it || typeof it !== "object") return null;
+  const replyText = typeof it.replyText === "string" ? it.replyText.trim() : "";
+  if (!replyText) return null;
+  const categories = normalizeCaseCategories(it);
+  return {
+    id:
+      typeof it.id === "string" && it.id
+        ? it.id
+        : `case-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    categories,
+    category: categories[0],
+    reviewText: typeof it.reviewText === "string" ? it.reviewText.trim() : "",
+    contextText: typeof it.contextText === "string" ? it.contextText.trim() : "",
+    replyText,
+    createdAt: typeof it.createdAt === "string" ? it.createdAt : new Date().toISOString(),
+  };
+}
+
 function rowToKnowledge(row) {
   return {
     id: row.id,
@@ -80,9 +116,14 @@ function rowToKnowledge(row) {
 }
 
 function rowToLibraryCase(row) {
+  const categories = normalizeCaseCategories({
+    categories: row.categories,
+    category: row.category,
+  });
   return {
     id: row.id,
-    category: normalizeCaseCategory({ category: row.category }),
+    category: categories[0],
+    categories,
     reviewText: row.review_text || "",
     contextText: row.context_text || "",
     replyText: row.reply_text || "",
@@ -260,14 +301,18 @@ async function saveLibrary(items) {
 
   if (cleaned.length === 0) return true;
 
-  const rows = cleaned.map((item) => ({
-    id: item.id,
-    category: normalizeCaseCategory(item),
-    review_text: item.reviewText || "",
-    context_text: item.contextText || "",
-    reply_text: item.replyText || "",
-    created_at: item.createdAt || new Date().toISOString(),
-  }));
+  const rows = cleaned.map((item) => {
+    const categories = normalizeCaseCategories(item);
+    return {
+      id: item.id,
+      category: categories[0],
+      categories,
+      review_text: item.reviewText || "",
+      context_text: item.contextText || "",
+      reply_text: item.replyText || "",
+      created_at: item.createdAt || new Date().toISOString(),
+    };
+  });
 
   const { error } = await client.from("review_library").upsert(rows, { onConflict: "id" });
   if (error) {
@@ -277,6 +322,19 @@ async function saveLibrary(items) {
   return true;
 }
 
+async function appendLibraryCase(entry) {
+  const item = cleanLibraryItem(entry);
+  if (!item) throw new Error("replyText is required.");
+  if (!isDbEnabled()) {
+    throw new Error("Review library requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  }
+  const current = await loadLibrary();
+  current.unshift(item);
+  const ok = await saveLibrary(current);
+  if (!ok) throw new Error("Failed to save review library.");
+  return item;
+}
+
 module.exports = {
   isDbEnabled,
   loadKnowledge,
@@ -284,6 +342,9 @@ module.exports = {
   appendKnowledge,
   loadLibrary,
   saveLibrary,
+  appendLibraryCase,
+  cleanLibraryItem,
   normalizeKnowledgeCategory,
   normalizeCaseCategory,
+  normalizeCaseCategories,
 };

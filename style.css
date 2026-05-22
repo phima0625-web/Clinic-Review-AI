@@ -827,3 +827,42 @@ body.app--user #panel-generate .card {
 body.app--user #panel-generate .card:last-child {
   margin-bottom: 0;
 }
+
+.category-fieldset {
+  border: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  min-width: 0;
+}
+
+.category-fieldset legend {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 0;
+  margin-bottom: 0.35rem;
+}
+
+.category-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.category-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.category-check input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
+.hint-success {
+  color: var(--primary);
+}

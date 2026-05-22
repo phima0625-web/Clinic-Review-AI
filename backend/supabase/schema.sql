@@ -12,11 +12,16 @@ create table if not exists clinic_knowledge (
 create table if not exists review_library (
   id text primary key,
   category text not null default 'Other',
+  categories text[] not null default '{}',
   review_text text not null default '',
   context_text text not null default '',
   reply_text text not null default '',
   created_at timestamptz not null default now()
 );
+
+-- Migration for existing projects (run once in SQL Editor if table already exists):
+-- alter table review_library add column if not exists categories text[] not null default '{}';
+-- update review_library set categories = array[category]::text[] where categories = '{}' or categories is null;
 
 create index if not exists idx_clinic_knowledge_updated
   on clinic_knowledge (updated_at desc);

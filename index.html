@@ -95,6 +95,34 @@
             </div>
           </div>
 
+          <div class="card user-library-submit user-only">
+            <h2>Add a past case to the library</h2>
+            <p class="hint">Share a real review you already handled—the approved public reply and what happened on your side. Admins use these examples to improve future drafts.</p>
+            <form id="user-library-form">
+              <label class="field">
+                <span>Past review we received</span>
+                <textarea id="ul-review" rows="1" required placeholder="Paste the review exactly as the patient posted it…"></textarea>
+              </label>
+              <label class="field">
+                <span>Past context for that review</span>
+                <textarea id="ul-context" rows="1" placeholder="What happened on your side, policies applied, or facts staff agreed on…"></textarea>
+              </label>
+              <fieldset class="field category-fieldset">
+                <legend>Categories for this review</legend>
+                <p class="hint category-select-hint">Select all that apply (at least one).</p>
+                <div id="ul-categories" class="category-checkboxes"></div>
+              </fieldset>
+              <label class="field">
+                <span>Final approved reply (as published)</span>
+                <textarea id="ul-reply" rows="1" required placeholder="The exact reply you posted publicly after approval…"></textarea>
+              </label>
+              <div class="actions">
+                <button type="submit" id="user-library-submit" class="btn primary">Save to library</button>
+              </div>
+            </form>
+            <p id="user-library-status" class="hint" hidden></p>
+          </div>
+
           <div class="card transparency admin-only">
             <h2>Transparency</h2>
             <p class="hint">Which library cases were sent to the model, why they were chosen, which clinic knowledge entries the model cited, and which style rules applied (read-only).</p>
@@ -146,23 +174,14 @@
             </p>
             <form id="library-form">
               <input type="hidden" id="lf-editing-id" value="" />
-              <label class="field category-select-wrap">
-                <span>Category</span>
-                <select id="lf-category">
-                  <option value="" selected>Select a category</option>
-                  <option value="Treatment / Care quality">Treatment / Care quality</option>
-                  <option value="Provider interaction">Provider interaction</option>
-                  <option value="Wait time / Scheduling">Wait time / Scheduling</option>
-                  <option value="Billing / Insurance">Billing / Insurance</option>
-                  <option value="Referral / Orders">Referral / Orders</option>
-                  <option value="Front desk / Staff">Front desk / Staff</option>
-                  <option value="Other">Other</option>
-                </select>
+              <fieldset class="field category-fieldset">
+                <legend>Categories</legend>
                 <p class="hint category-select-hint" id="lf-category-hint">
-                  Pick the best match for this review. Only these categories are available.
+                  Select all that apply (at least one).
                 </p>
+                <div id="lf-categories" class="category-checkboxes"></div>
                 <p class="category-helper hint" id="lf-category-help" hidden></p>
-              </label>
+              </fieldset>
               <label class="field">
                 <span>Past review we received</span>
                 <textarea id="lf-review" rows="1" required placeholder="Paste the review exactly as the patient posted it…"></textarea>

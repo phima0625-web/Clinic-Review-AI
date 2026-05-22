@@ -293,7 +293,7 @@
 
   function sameCategoryAsReviewerBonus(userCategory, c) {
     if (!userCategory) return 0;
-    return coerceCategory(c.category) === userCategory ? 6 : 0;
+    return caseHasCategory(c, userCategory) ? 6 : 0;
   }
 
   const LEGACY_TAG_TO_CATEGORY = {
@@ -311,6 +311,35 @@
 
   function coerceCategory(raw) {
     return normalizeCategoryValue(raw) || "Other";
+  }
+
+  function normalizeCaseCategoriesFromRaw(c) {
+    if (c && Array.isArray(c.categories) && c.categories.length) {
+      const seen = new Set();
+      const out = [];
+      for (const item of c.categories) {
+        const v = normalizeCategoryValue(item);
+        if (v && !seen.has(v)) {
+          seen.add(v);
+          out.push(v);
+        }
+      }
+      if (out.length) return out;
+    }
+    return [inferCategoryFromLegacy(c)];
+  }
+
+  function getCaseCategories(c) {
+    return normalizeCaseCategoriesFromRaw(c);
+  }
+
+  function formatCaseCategories(c) {
+    return getCaseCategories(c).join(" · ");
+  }
+
+  function caseHasCategory(c, userCat) {
+    if (!userCat) return false;
+    return getCaseCategories(c).includes(userCat);
   }
 
   function inferCategoryFromLegacy(c) {
@@ -336,10 +365,11 @@
   }
 
   function normalizeLibraryCase(c) {
-    const category = inferCategoryFromLegacy(c);
+    const categories = normalizeCaseCategoriesFromRaw(c);
     return {
       id: c.id != null ? String(c.id) : "",
-      category,
+      category: categories[0],
+      categories,
       reviewText: typeof c.reviewText === "string" ? c.reviewText : "",
       contextText: typeof c.contextText === "string" ? c.contextText : "",
       replyText: typeof c.replyText === "string" ? c.replyText : "",
@@ -509,6 +539,14 @@
     return hit ? 3 : 0;
   }
 
+  function caseCategoryOverlapBonus(queryTokens, c) {
+    let max = 0;
+    for (const cat of getCaseCategories(c)) {
+      max = Math.max(max, categoryOverlapBonus(queryTokens, cat));
+    }
+    return max;
+  }
+
   function scoreCase(queryTokens, c, userCategory) {
     const reviewTokens = new Set(tokenize(c.reviewText));
     const replyTokens = new Set(tokenize(c.replyText));
@@ -519,7 +557,7 @@
       if (replyTokens.has(t)) score += 1;
       if (contextTokens.has(t)) score += 1;
     }
-    score += categoryOverlapBonus(queryTokens, c.category);
+    score += caseCategoryOverlapBonus(queryTokens, c);
     score += sameCategoryAsReviewerBonus(userCategory, c);
     return score;
   }
@@ -586,8 +624,8 @@
     const top = [];
     if (n <= 0) return top;
     if (userCat) {
-      const sameCatLib = library.filter((c) => coerceCategory(c.category) === userCat);
-      const otherLib = library.filter((c) => coerceCategory(c.category) !== userCat);
+      const sameCatLib = library.filter((c) => caseHasCategory(c, userCat));
+      const otherLib = library.filter((c) => !caseHasCategory(c, userCat));
       const rankedSame = findSimilarCases(matchingText, sameCatLib, sameCatLib.length, userCat);
       const rankedOther = findSimilarCases(matchingText, otherLib, otherLib.length, userCat);
       for (let i = 0; i < rankedSame.length && top.length < n; i++) {
@@ -624,7 +662,7 @@
     } else if (tokenize(matchingText).length === 0 && !userCat) {
       selectionSummary = `Both the review and context fields were empty; ties are broken by sort order. Showing ${nShow} reference case(s) out of ${libLen}.`;
     } else if (userCat) {
-      const inPool = library.filter((c) => coerceCategory(c.category) === userCat).length;
+      const inPool = library.filter((c) => caseHasCategory(c, userCat)).length;
       if (inPool === 0) {
         selectionSummary =
           `You chose “${userCat}”, but no library cases use that category. All ${nShow} pick(s) are FALLBACK from other categories (offline prototype — same rules as the server).`;
@@ -645,11 +683,13 @@
         : "No strong keyword overlap; generic empathetic template was used.";
 
     const selectedCases = matches.map(({ case: c, score, selectionType }) => {
-      const category = coerceCategory(c.category);
+      const categories = getCaseCategories(c);
+      const category = categories[0];
       return {
         id: c.id != null ? String(c.id) : "",
         category,
-        title: category,
+        categories,
+        title: categories.join(" · "),
         score,
         selectionType,
         selectedReviewCategory: userCat || "",
@@ -679,8 +719,8 @@
     const lead = [];
     if (kind === "SAME_CATEGORY" && userCat) {
       lead.push(
-        `SAME CATEGORY — library case “${coerceCategory(
-          c.category
+        `SAME CATEGORY — library case “${formatCaseCategories(
+          c
         )}” matches your selection “${userCat}”; ranked within that group by text similarity.`
       );
     } else if (kind === "FALLBACK" && userCat) {
@@ -702,8 +742,8 @@
     const shared = queryTokens.filter(
       (t) => reviewTokens.has(t) || replyTokens.has(t) || contextTokens.has(t)
     );
-    const cat = coerceCategory(c.category);
-    const catBonus = categoryOverlapBonus(queryTokens, cat);
+    const catTags = getCaseCategories(c);
+    const catBonus = caseCategoryOverlapBonus(queryTokens, c);
     const sameCatBonus = sameCategoryAsReviewerBonus(userCat, c);
     const parts = [...lead];
     if (shared.length) {
@@ -714,7 +754,7 @@
       );
     }
     if (catBonus > 0) {
-      parts.push(`Category/theme overlap: “${cat}” aligns with words in your new review or notes (+3).`);
+      parts.push(`Category/theme overlap: “${catTags.join(" · ")}” aligns with words in your new review or notes (+3).`);
     }
     if (sameCatBonus > 0 && userCat) {
       parts.push(`Score includes +6 because this row’s category matches what you selected for this review.`);
@@ -1138,10 +1178,10 @@
   }
 
   function updateCategoryHelper() {
-    const sel = document.getElementById("lf-category");
     const help = document.getElementById("lf-category-help");
-    if (!sel || !help) return;
-    const v = normalizeCategoryValue(sel.value);
+    if (!help) return;
+    const cats = getCategoriesFromCheckboxes("lf-categories");
+    const v = cats[0] || null;
     if (!v) {
       help.hidden = true;
       help.textContent = "";
@@ -1151,19 +1191,127 @@
     help.textContent = CATEGORY_DESCRIPTIONS[v] || "";
   }
 
-  function setLibraryCategoryForm(value) {
-    const sel = document.getElementById("lf-category");
-    if (!sel) return;
-    const v = normalizeCategoryValue(value);
-    sel.value = v || "";
-    sel.setCustomValidity("");
+  function renderCategoryCheckboxes(containerId, inputName) {
+    const container = document.getElementById(containerId);
+    if (!container || container.dataset.rendered === "1") return;
+    container.dataset.rendered = "1";
+    container.innerHTML = "";
+    LIBRARY_CATEGORY_VALUES.forEach((val) => {
+      const label = document.createElement("label");
+      label.className = "category-check";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = inputName;
+      input.value = val;
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(val));
+      container.appendChild(label);
+    });
+  }
+
+  function getCategoriesFromCheckboxes(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('input[type="checkbox"]:checked'))
+      .map((el) => normalizeCategoryValue(el.value))
+      .filter(Boolean);
+  }
+
+  function setCategoryCheckboxes(containerId, categories) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const set = new Set(
+      (Array.isArray(categories) ? categories : [categories])
+        .map((c) => normalizeCategoryValue(c))
+        .filter(Boolean)
+    );
+    container.querySelectorAll('input[type="checkbox"]').forEach((el) => {
+      el.checked = set.has(normalizeCategoryValue(el.value));
+    });
     updateCategoryHelper();
   }
 
+  function clearCategoryCheckboxes(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.querySelectorAll('input[type="checkbox"]').forEach((el) => {
+      el.checked = false;
+    });
+    updateCategoryHelper();
+  }
+
+  function setLibraryCategoryForm(valueOrCase) {
+    const cats = Array.isArray(valueOrCase)
+      ? valueOrCase
+      : valueOrCase && typeof valueOrCase === "object"
+        ? getCaseCategories(valueOrCase)
+        : valueOrCase
+          ? [coerceCategory(valueOrCase)]
+          : [];
+    setCategoryCheckboxes("lf-categories", cats);
+  }
+
   function getLibraryCategoryFromForm() {
-    const sel = document.getElementById("lf-category");
-    if (!sel || sel.value === "") return null;
-    return normalizeCategoryValue(sel.value);
+    const cats = getCategoriesFromCheckboxes("lf-categories");
+    return cats.length ? cats : null;
+  }
+
+  async function submitUserLibraryCase() {
+    const status = document.getElementById("user-library-status");
+    const categories = getCategoriesFromCheckboxes("ul-categories");
+    const reviewText = document.getElementById("ul-review")?.value.trim() || "";
+    const contextText = document.getElementById("ul-context")?.value.trim() || "";
+    const replyText = document.getElementById("ul-reply")?.value.trim() || "";
+
+    if (!categories.length) {
+      if (status) {
+        status.textContent = "Select at least one category.";
+        status.classList.remove("hint-success");
+        status.hidden = false;
+      }
+      return;
+    }
+    if (!replyText) {
+      if (status) {
+        status.textContent = "Approved reply is required.";
+        status.classList.remove("hint-success");
+        status.hidden = false;
+      }
+      return;
+    }
+
+    const btn = document.getElementById("user-library-submit");
+    if (btn) btn.disabled = true;
+    if (status) status.hidden = true;
+
+    try {
+      const res = await apiFetch("/library/cases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewText, contextText, categories, replyText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || res.statusText || "Save failed");
+      }
+      document.getElementById("user-library-form")?.reset();
+      clearCategoryCheckboxes("ul-categories");
+      refreshTextareaHeights(document.getElementById("user-library-form"));
+      if (status) {
+        status.textContent = "Saved — admins can review it in Review Library.";
+        status.classList.add("hint-success");
+        status.hidden = false;
+      }
+    } catch (err) {
+      if (err && err.message === "Login required") return;
+      if (status) {
+        status.textContent = (err && err.message) || "Could not save. Try again.";
+        status.classList.remove("hint-success");
+        status.hidden = false;
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   function openLibraryCaseModal(c) {
@@ -1172,7 +1320,7 @@
     const titleEl = document.getElementById("library-case-modal-title");
     if (!root || !bodyEl || !titleEl) return;
 
-    titleEl.textContent = coerceCategory(c.category);
+    titleEl.textContent = formatCaseCategories(c);
     bodyEl.textContent = "";
 
     function addSection(heading, text, emptyHint) {
@@ -1282,7 +1430,7 @@
 
     qEl.value = "";
     aEl.value = "";
-    catEl.value = coerceCategory(c.category);
+    catEl.value = getCaseCategories(c)[0] || "Other";
     catEl.disabled = true;
     qEl.readOnly = true;
     aEl.readOnly = true;
@@ -1484,7 +1632,10 @@
     function buildRowFromMeta(row) {
       const excerpt = row.reviewExcerpt || "";
       const ctx = row.contextExcerpt || "";
-      const catLabel = coerceCategory(row.category != null ? row.category : row.title);
+      const catLabel =
+        Array.isArray(row.categories) && row.categories.length
+          ? row.categories.join(" · ")
+          : coerceCategory(row.category != null ? row.category : row.title);
       const { cls: badgeCls, label: badgeLabel } = badgeForSelectionType(row.selectionType);
 
       const div = document.createElement("div");
@@ -1552,7 +1703,7 @@
       return;
     }
     fallback.forEach(({ case: c, score, selectionType }) => {
-      const catLabel = coerceCategory(c.category);
+      const catLabel = formatCaseCategories(c);
       const st = selectionType || "GENERAL";
       const { cls: bcls, label: badgeLabel } = badgeForSelectionType(st);
 
@@ -1596,7 +1747,7 @@
     if (q) {
       lib = lib.filter(
         (c) =>
-          (c.category || "").toLowerCase().includes(q) ||
+          formatCaseCategories(c).toLowerCase().includes(q) ||
           (c.reviewText || "").toLowerCase().includes(q) ||
           (c.contextText || "").toLowerCase().includes(q) ||
           (c.replyText || "").toLowerCase().includes(q)
@@ -1610,7 +1761,7 @@
     lib.forEach((c) => {
       const card = document.createElement("div");
       card.className = "lib-card";
-      const catLabel = coerceCategory(c.category);
+      const catLabel = formatCaseCategories(c);
       const ctxRaw = (c.contextText || "").trim();
       const ctxDisplay =
         ctxRaw.length > 0
@@ -1645,7 +1796,7 @@
           openLibraryCaseModal(c);
         } else if (action === "edit") {
           document.getElementById("lf-editing-id").value = c.id;
-          setLibraryCategoryForm(c.category);
+          setLibraryCategoryForm(c);
           document.getElementById("lf-review").value = c.reviewText;
           const lfCtx = document.getElementById("lf-context");
           if (lfCtx) lfCtx.value = c.contextText || "";
@@ -1666,7 +1817,7 @@
           const sit = document.getElementById("gen-situation");
           if (sit) sit.value = (c.contextText || "").trim();
           const gcat = document.getElementById("gen-category");
-          if (gcat) gcat.value = coerceCategory(c.category);
+          if (gcat) gcat.value = getCaseCategories(c)[0] || "";
           refreshTextareaHeights(document.getElementById("panel-generate"));
         }
       });
@@ -1715,9 +1866,7 @@
   function resetLibraryForm() {
     document.getElementById("lf-editing-id").value = "";
     document.getElementById("library-form").reset();
-    const sel = document.getElementById("lf-category");
-    if (sel) sel.setCustomValidity("");
-    updateCategoryHelper();
+    clearCategoryCheckboxes("lf-categories");
     document.getElementById("library-form-title").textContent = "Add to library";
     document.getElementById("library-form-submit").textContent = "Save";
     document.getElementById("library-form-cancel").hidden = true;
@@ -1733,6 +1882,8 @@
       await fetchLibrary();
     }
     ensureKnowledgeSuggestCategorySelect();
+    renderCategoryCheckboxes("lf-categories", "lf-cat");
+    renderCategoryCheckboxes("ul-categories", "ul-cat");
 
     document.getElementById("tab-generate").addEventListener("click", switchToGenerate);
     document.getElementById("tab-library").addEventListener("click", switchToLibrary);
@@ -1740,32 +1891,25 @@
 
     document.getElementById("library-search").addEventListener("input", renderLibraryList);
 
-    const lfCategorySel = document.getElementById("lf-category");
-    if (lfCategorySel) {
-      lfCategorySel.addEventListener("change", () => {
-        lfCategorySel.setCustomValidity("");
-        updateCategoryHelper();
-      });
+    const lfCategories = document.getElementById("lf-categories");
+    if (lfCategories) {
+      lfCategories.addEventListener("change", updateCategoryHelper);
     }
     updateCategoryHelper();
 
     document.getElementById("library-form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const lfCat = document.getElementById("lf-category");
-      const category = getLibraryCategoryFromForm();
-      if (!category) {
-        if (lfCat) {
-          lfCat.setCustomValidity("Please select a category.");
-          lfCat.reportValidity();
-        }
+      const categories = getLibraryCategoryFromForm();
+      if (!categories) {
+        alert("Please select at least one category.");
         return;
       }
-      if (lfCat) lfCat.setCustomValidity("");
       const editingId = document.getElementById("lf-editing-id").value.trim();
       const lfCtx = document.getElementById("lf-context");
       const entry = {
         id: editingId || "case-" + Date.now(),
-        category,
+        categories,
+        category: categories[0],
         reviewText: document.getElementById("lf-review").value.trim(),
         contextText: lfCtx ? lfCtx.value.trim() : "",
         replyText: document.getElementById("lf-reply").value.trim(),
@@ -1783,6 +1927,11 @@
 
     document.getElementById("library-form-cancel").addEventListener("click", () => {
       resetLibraryForm();
+    });
+
+    document.getElementById("user-library-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitUserLibraryCase();
     });
 
     const genOut = document.getElementById("gen-output");
@@ -1873,6 +2022,7 @@
       try {
         await upsertLibraryCase({
           id: "case-" + Date.now(),
+          categories: [category],
           category,
           reviewText: reviewText || "(no review text)",
           replyText,
