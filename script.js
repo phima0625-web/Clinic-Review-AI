@@ -8,7 +8,7 @@
    * The Express server calls Google Gemini using GEMINI_API_KEY from backend/.env only.
    * This file never contains or sends your API key — only review/context/pastCases.
    */
-  const API_BASE_URL = "http://localhost:3000";
+  const API_BASE_URL = "https://clinic-review-ai.onrender.com";
 
   const LIBRARY_CATEGORY_VALUES = [
     "Treatment / Care quality",
