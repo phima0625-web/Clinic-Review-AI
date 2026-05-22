@@ -816,6 +816,14 @@ body.app--user .user-only.hint {
   display: block;
 }
 
+body.app--user .tabs .tab.user-only {
+  display: block;
+}
+
+body:not(.app--user) .tabs .tab.user-only {
+  display: none;
+}
+
 body.app--user .app-header {
   margin-bottom: 1rem;
 }
@@ -825,6 +833,10 @@ body.app--user #panel-generate .card {
 }
 
 body.app--user #panel-generate .card:last-child {
+  margin-bottom: 0;
+}
+
+body.app--user #panel-add-reply .card {
   margin-bottom: 0;
 }
 

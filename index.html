@@ -36,10 +36,11 @@
       <p class="subtitle user-only">Draft a public reply to a patient review.</p>
     </header>
 
-    <nav class="tabs admin-only" role="tablist">
+    <nav class="tabs" role="tablist">
       <button type="button" class="tab tab-active" role="tab" id="tab-generate" aria-controls="panel-generate" aria-selected="true">Generate Reply</button>
-      <button type="button" class="tab" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false">Review Library</button>
-      <button type="button" class="tab" role="tab" id="tab-knowledge" aria-controls="panel-knowledge" aria-selected="false">Clinic knowledge</button>
+      <button type="button" class="tab user-only" role="tab" id="tab-add-reply" aria-controls="panel-add-reply" aria-selected="false">Add approved reply</button>
+      <button type="button" class="tab admin-only" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false">Review Library</button>
+      <button type="button" class="tab admin-only" role="tab" id="tab-knowledge" aria-controls="panel-knowledge" aria-selected="false">Clinic knowledge</button>
     </nav>
 
     <main>
@@ -95,34 +96,6 @@
             </div>
           </div>
 
-          <div class="card user-library-submit user-only">
-            <h2>Add a past case to the library</h2>
-            <p class="hint">Share a real review you already handled—the approved public reply and what happened on your side. Admins use these examples to improve future drafts.</p>
-            <form id="user-library-form">
-              <label class="field">
-                <span>Past review we received</span>
-                <textarea id="ul-review" rows="1" required placeholder="Paste the review exactly as the patient posted it…"></textarea>
-              </label>
-              <label class="field">
-                <span>Past context for that review</span>
-                <textarea id="ul-context" rows="1" placeholder="What happened on your side, policies applied, or facts staff agreed on…"></textarea>
-              </label>
-              <fieldset class="field category-fieldset">
-                <legend>Categories for this review</legend>
-                <p class="hint category-select-hint">Select all that apply (at least one).</p>
-                <div id="ul-categories" class="category-checkboxes"></div>
-              </fieldset>
-              <label class="field">
-                <span>Final approved reply (as published)</span>
-                <textarea id="ul-reply" rows="1" required placeholder="The exact reply you posted publicly after approval…"></textarea>
-              </label>
-              <div class="actions">
-                <button type="submit" id="user-library-submit" class="btn primary">Save to library</button>
-              </div>
-            </form>
-            <p id="user-library-status" class="hint" hidden></p>
-          </div>
-
           <div class="card transparency admin-only">
             <h2>Transparency</h2>
             <p class="hint">Which library cases were sent to the model, why they were chosen, which clinic knowledge entries the model cited, and which style rules applied (read-only).</p>
@@ -147,6 +120,38 @@
               <h3>About this reply</h3>
               <p id="gen-transparency-why"></p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="panel-add-reply" class="panel user-only" role="tabpanel" aria-labelledby="tab-add-reply" hidden>
+        <div class="stack">
+          <div class="card">
+            <h2>Add approved reply</h2>
+            <p class="hint">Share a real review you already handled—the approved public reply and what happened on your side. Admins use these examples to improve future drafts.</p>
+            <form id="user-library-form">
+              <label class="field">
+                <span>Past review we received</span>
+                <textarea id="ul-review" rows="1" required placeholder="Paste the review exactly as the patient posted it…"></textarea>
+              </label>
+              <label class="field">
+                <span>Past context for that review</span>
+                <textarea id="ul-context" rows="1" placeholder="What happened on your side, policies applied, or facts staff agreed on…"></textarea>
+              </label>
+              <fieldset class="field category-fieldset">
+                <legend>Categories for this review</legend>
+                <p class="hint category-select-hint">Select all that apply (at least one).</p>
+                <div id="ul-categories" class="category-checkboxes"></div>
+              </fieldset>
+              <label class="field">
+                <span>Final approved reply (as published)</span>
+                <textarea id="ul-reply" rows="1" required placeholder="The exact reply you posted publicly after approval…"></textarea>
+              </label>
+              <div class="actions">
+                <button type="submit" id="user-library-submit" class="btn primary">Save to library</button>
+              </div>
+            </form>
+            <p id="user-library-status" class="hint" hidden></p>
           </div>
         </div>
       </section>

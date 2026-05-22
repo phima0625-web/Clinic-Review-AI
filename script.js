@@ -1824,6 +1824,16 @@
     });
   }
 
+  function deactivateAddReplyTab() {
+    const tabAdd = document.getElementById("tab-add-reply");
+    const panelAdd = document.getElementById("panel-add-reply");
+    if (tabAdd) {
+      tabAdd.classList.remove("tab-active");
+      tabAdd.setAttribute("aria-selected", "false");
+    }
+    if (panelAdd) panelAdd.hidden = true;
+  }
+
   function switchToGenerate() {
     document.getElementById("tab-generate").classList.add("tab-active");
     document.getElementById("tab-library").classList.remove("tab-active");
@@ -1831,9 +1841,26 @@
     document.getElementById("tab-generate").setAttribute("aria-selected", "true");
     document.getElementById("tab-library").setAttribute("aria-selected", "false");
     document.getElementById("tab-knowledge").setAttribute("aria-selected", "false");
+    deactivateAddReplyTab();
     document.getElementById("panel-generate").hidden = false;
     document.getElementById("panel-library").hidden = true;
     document.getElementById("panel-knowledge").hidden = true;
+  }
+
+  function switchToAddReply() {
+    document.getElementById("tab-add-reply").classList.add("tab-active");
+    document.getElementById("tab-generate").classList.remove("tab-active");
+    document.getElementById("tab-library").classList.remove("tab-active");
+    document.getElementById("tab-knowledge").classList.remove("tab-active");
+    document.getElementById("tab-add-reply").setAttribute("aria-selected", "true");
+    document.getElementById("tab-generate").setAttribute("aria-selected", "false");
+    document.getElementById("tab-library").setAttribute("aria-selected", "false");
+    document.getElementById("tab-knowledge").setAttribute("aria-selected", "false");
+    document.getElementById("panel-add-reply").hidden = false;
+    document.getElementById("panel-generate").hidden = true;
+    document.getElementById("panel-library").hidden = true;
+    document.getElementById("panel-knowledge").hidden = true;
+    refreshTextareaHeights(document.getElementById("panel-add-reply"));
   }
 
   function switchToLibrary() {
@@ -1843,6 +1870,7 @@
     document.getElementById("tab-library").setAttribute("aria-selected", "true");
     document.getElementById("tab-generate").setAttribute("aria-selected", "false");
     document.getElementById("tab-knowledge").setAttribute("aria-selected", "false");
+    deactivateAddReplyTab();
     document.getElementById("panel-library").hidden = false;
     document.getElementById("panel-generate").hidden = true;
     document.getElementById("panel-knowledge").hidden = true;
@@ -1855,6 +1883,7 @@
     document.getElementById("tab-knowledge").setAttribute("aria-selected", "true");
     document.getElementById("tab-generate").setAttribute("aria-selected", "false");
     document.getElementById("tab-library").setAttribute("aria-selected", "false");
+    deactivateAddReplyTab();
     document.getElementById("panel-knowledge").hidden = false;
     document.getElementById("panel-generate").hidden = true;
     document.getElementById("panel-library").hidden = true;
@@ -1886,6 +1915,7 @@
     renderCategoryCheckboxes("ul-categories", "ul-cat");
 
     document.getElementById("tab-generate").addEventListener("click", switchToGenerate);
+    document.getElementById("tab-add-reply")?.addEventListener("click", switchToAddReply);
     document.getElementById("tab-library").addEventListener("click", switchToLibrary);
     document.getElementById("tab-knowledge").addEventListener("click", switchToKnowledge);
 
