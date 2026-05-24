@@ -667,10 +667,19 @@ textarea {
   word-break: break-word;
 }
 
+.entry-meta,
 .kb-meta {
   margin-top: 0.4rem;
   font-size: 0.7rem;
   color: var(--muted);
+}
+
+.lib-card .entry-meta {
+  margin-bottom: 0.35rem;
+}
+
+.case-modal-meta {
+  margin: 0 0 0.75rem;
 }
 
 .kb-actions {

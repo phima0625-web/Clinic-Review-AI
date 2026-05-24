@@ -1007,6 +1007,24 @@
     renderKnowledge();
   }
 
+  function formatEntryTimestamp(iso) {
+    if (!iso || !String(iso).trim()) return "";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+  }
+
+  function buildAddedMetaLine(createdAt, updatedAt) {
+    const added = formatEntryTimestamp(createdAt);
+    const updated = formatEntryTimestamp(updatedAt);
+    if (!added && !updated) return "";
+    const parts = [];
+    if (added) parts.push(`Added ${added}`);
+    if (updated && updatedAt && createdAt && updatedAt !== createdAt) {
+      parts.push(`Updated ${updated}`);
+    }
+    return parts.join(" · ");
+  }
+
   function renderKnowledge() {
     const list = document.getElementById("kb-list");
     if (!list) return;
@@ -1129,10 +1147,10 @@
         aEl.textContent = `A: ${it.answer || ""}`;
         row.appendChild(aEl);
         const meta = document.createElement("div");
-        meta.className = "kb-meta";
-        const updated = it.updatedAt || it.createdAt || "";
-        if (updated) meta.textContent = `Updated ${new Date(updated).toLocaleString()}`;
-        row.appendChild(meta);
+        meta.className = "entry-meta kb-meta";
+        const metaText = buildAddedMetaLine(it.createdAt, it.updatedAt);
+        if (metaText) meta.textContent = metaText;
+        if (metaText) row.appendChild(meta);
 
         const actions = document.createElement("div");
         actions.className = "kb-actions";
@@ -1322,6 +1340,14 @@
 
     titleEl.textContent = formatCaseCategories(c);
     bodyEl.textContent = "";
+
+    const addedLine = buildAddedMetaLine(c.createdAt, null);
+    if (addedLine) {
+      const meta = document.createElement("p");
+      meta.className = "entry-meta case-modal-meta";
+      meta.textContent = addedLine;
+      bodyEl.appendChild(meta);
+    }
 
     function addSection(heading, text, emptyHint) {
       const sec = document.createElement("section");
@@ -1767,11 +1793,16 @@
         ctxRaw.length > 0
           ? `${escapeHtml(ctxRaw.slice(0, 100))}${ctxRaw.length > 100 ? "…" : ""}`
           : '<span class="lib-empty-field">(none saved)</span>';
+      const addedLine = buildAddedMetaLine(c.createdAt, null);
+      const metaHtml = addedLine
+        ? `<p class="entry-meta">${escapeHtml(addedLine)}</p>`
+        : "";
       card.innerHTML = `
         <h3>${escapeHtml(catLabel)}</h3>
         <p class="excerpt"><strong>Review:</strong> ${escapeHtml((c.reviewText || "").slice(0, 100))}${(c.reviewText || "").length > 100 ? "…" : ""}</p>
         <p class="excerpt excerpt-internal"><strong>Past context (internal):</strong> ${ctxDisplay}</p>
         <p class="excerpt"><strong>Published reply:</strong> ${escapeHtml((c.replyText || "").slice(0, 100))}${(c.replyText || "").length > 100 ? "…" : ""}</p>
+        ${metaHtml}
         <div class="lib-actions">
           <button type="button" class="btn" data-action="view" data-id="${escapeHtml(c.id)}">View full case</button>
           <button type="button" class="btn" data-action="kb-suggest" data-id="${escapeHtml(c.id)}">Suggest clinic knowledge</button>
