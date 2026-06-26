@@ -828,11 +828,12 @@
    *
    * Older servers may omit `status`; we treat anything with a `reply` as a reply.
    */
-  async function generateReplyWithAI(reviewText, library, context, clarifications, round) {
+  async function generateReplyWithAI(reviewText, library, context, clarifications, round, auditOpts) {
     const situation =
       context && typeof context.situation === "string" ? context.situation : "";
     const category =
       context && typeof context.category === "string" ? context.category : "";
+    const opts = auditOpts && typeof auditOpts === "object" ? auditOpts : {};
     const payload = {
       review: reviewText,
       context: { situation, category },
@@ -840,6 +841,8 @@
       clarifications: Array.isArray(clarifications) ? clarifications : [],
       round: Number.isFinite(round) ? round : clarifications && clarifications.length ? 2 : 1,
     };
+    if (opts.auditSessionId) payload.auditSessionId = opts.auditSessionId;
+    if (opts.uiStep) payload.uiStep = opts.uiStep;
 
     try {
       const res = await apiFetch("/generate-reply", {
@@ -855,6 +858,8 @@
       }
 
       const transparency = normalizeServerTransparency(data.transparency);
+      const auditSessionId =
+        typeof data.auditSessionId === "string" ? data.auditSessionId : opts.auditSessionId || "";
       if (data.status === "questions" && Array.isArray(data.questions)) {
         return {
           status: "questions",
@@ -863,6 +868,7 @@
             .filter(Boolean),
           round: Number.isFinite(data.round) ? data.round : payload.round,
           transparency,
+          auditSessionId,
         };
       }
 
@@ -870,6 +876,7 @@
         status: "reply",
         reply: typeof data.reply === "string" ? data.reply : "",
         transparency,
+        auditSessionId,
       };
     } catch (err) {
       if (err && err.message === "Login required") {
@@ -882,7 +889,7 @@
   }
 
   /** Reads the two text areas and calls the server (or offline prototype). */
-  function generateReplyFacade(reviewText, library, clarifications, round) {
+  function generateReplyFacade(reviewText, library, clarifications, round, auditOpts) {
     const sitEl = document.getElementById("gen-situation");
     const catEl = document.getElementById("gen-category");
     const situation = sitEl && sitEl.value ? sitEl.value.trim() : "";
@@ -892,7 +899,8 @@
       library,
       { situation, category },
       clarifications,
-      round
+      round,
+      auditOpts
     );
   }
 
@@ -907,7 +915,7 @@
     const submit = document.getElementById("btn-clarify-submit");
     const skip = document.getElementById("btn-clarify-skip");
     if (!card || !form || !submit || !skip) {
-      return Promise.resolve([]);
+      return Promise.resolve({ clarifications: [], uiStep: "clarify_skip" });
     }
 
     form.innerHTML = "";
@@ -949,12 +957,12 @@
           .filter((p) => p.question && p.answer);
         cleanup();
         card.hidden = true;
-        resolve(pairs);
+        resolve({ clarifications: pairs, uiStep: "clarify_submit" });
       }
       function onSkip() {
         cleanup();
         card.hidden = true;
-        resolve([]);
+        resolve({ clarifications: [], uiStep: "clarify_skip" });
       }
       submit.addEventListener("click", onSubmit);
       skip.addEventListener("click", onSkip);
@@ -1330,6 +1338,287 @@
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  // ---- AI audit log (admin) --------------------------------------------------
+
+  let auditListCache = [];
+  let auditLoadError = "";
+  let auditSessionDetail = null;
+
+  function auditFeatureLabel(feature) {
+    if (feature === "suggest_knowledge") return "Suggest knowledge";
+    if (feature === "generate_reply") return "Generate reply";
+    return feature || "Unknown";
+  }
+
+  function formatTokenTotals(t) {
+    if (!t || typeof t !== "object") return "—";
+    const parts = [];
+    if (t.promptTokenCount != null) parts.push(`in ${t.promptTokenCount}`);
+    const out = t.candidatesTokenCount != null ? t.candidatesTokenCount : t.outputTokenCount;
+    if (out != null) parts.push(`out ${out}`);
+    if (t.thoughtsTokenCount != null) parts.push(`reasoning ${t.thoughtsTokenCount}`);
+    if (t.totalTokenCount != null) parts.push(`total ${t.totalTokenCount}`);
+    return parts.length ? parts.join(" · ") : "—";
+  }
+
+  async function fetchAuditLog() {
+    auditLoadError = "";
+    try {
+      const res = await apiFetch("/audit-log?limit=50");
+      if (res.status === 503) {
+        auditListCache = [];
+        auditLoadError =
+          "Audit log requires Supabase. Run the ai_audit_sessions migration in schema.sql.";
+        renderAuditList();
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json().catch(() => ({}));
+      auditListCache = Array.isArray(data.items) ? data.items : [];
+    } catch (err) {
+      if (err && err.message === "Login required") return;
+      auditListCache = [];
+      auditLoadError = (err && err.message) || "Could not load audit log.";
+    }
+    renderAuditList();
+  }
+
+  function renderAuditList() {
+    const list = document.getElementById("audit-list");
+    if (!list) return;
+    list.innerHTML = "";
+
+    if (auditLoadError) {
+      const err = document.createElement("p");
+      err.className = "audit-empty hint-error";
+      err.textContent = auditLoadError;
+      list.appendChild(err);
+      return;
+    }
+
+    if (!auditListCache.length) {
+      const empty = document.createElement("p");
+      empty.className = "audit-empty";
+      empty.textContent = "No AI sessions logged yet. Generate a reply or suggest knowledge from a library case.";
+      list.appendChild(empty);
+      return;
+    }
+
+    auditListCache.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "audit-row";
+
+      const meta = document.createElement("div");
+      meta.className = "audit-row-meta";
+      const when = formatEntryTimestamp(item.createdAt);
+      const role = item.actorRole === "user" ? "Staff" : "Admin";
+      meta.textContent = `${when} · ${role} · ${auditFeatureLabel(item.feature)} · ${item.status || "—"}`;
+
+      const sub = document.createElement("div");
+      sub.className = "audit-row-sub";
+      sub.textContent = [
+        item.model || "model —",
+        formatTokenTotals(item.tokenTotals),
+        `${item.eventCount || 0} event(s)`,
+      ].join(" · ");
+
+      const preview = document.createElement("p");
+      preview.className = "audit-row-preview";
+      preview.textContent = item.reviewPreview || "(no preview)";
+
+      const actions = document.createElement("div");
+      actions.className = "audit-row-actions";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn";
+      btn.textContent = "View session";
+      btn.addEventListener("click", () => openAuditSessionModal(item.id));
+      actions.appendChild(btn);
+
+      row.appendChild(meta);
+      row.appendChild(sub);
+      row.appendChild(preview);
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+
+  function appendAuditPre(parent, label, text, collapsed) {
+    const wrap = document.createElement("details");
+    wrap.className = "audit-pre-wrap";
+    if (!collapsed) wrap.open = true;
+    const sum = document.createElement("summary");
+    sum.textContent = label;
+    wrap.appendChild(sum);
+    const pre = document.createElement("pre");
+    pre.className = "audit-pre";
+    pre.textContent = text || "";
+    wrap.appendChild(pre);
+    parent.appendChild(wrap);
+  }
+
+  function renderAuditEvent(ev, index) {
+    const card = document.createElement("div");
+    card.className = "audit-event";
+    const head = document.createElement("div");
+    head.className = "audit-event-head";
+    const type = (ev && ev.type) || "unknown";
+    const at = ev && ev.at ? formatEntryTimestamp(ev.at) : "";
+    head.textContent = `${index + 1}. ${type}${at ? ` · ${at}` : ""}`;
+    card.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "audit-event-body";
+
+    if (type === "user_input") {
+      if (ev.uiStep) {
+        const p = document.createElement("p");
+        p.className = "audit-kv";
+        p.textContent = `UI step: ${ev.uiStep}`;
+        body.appendChild(p);
+      }
+      if (ev.round != null) {
+        const p = document.createElement("p");
+        p.className = "audit-kv";
+        p.textContent = `Round: ${ev.round}`;
+        body.appendChild(p);
+      }
+      if (ev.review) appendAuditPre(body, "Review", ev.review, false);
+      if (ev.context) appendAuditPre(body, "Context", JSON.stringify(ev.context, null, 2), false);
+      if (ev.clarifications && ev.clarifications.length) {
+        appendAuditPre(body, "Clarifications", JSON.stringify(ev.clarifications, null, 2), false);
+      }
+      if (ev.libraryCase) appendAuditPre(body, "Library case", JSON.stringify(ev.libraryCase, null, 2), true);
+    } else if (type === "gemini_request") {
+      const p = document.createElement("p");
+      p.className = "audit-kv";
+      p.textContent = `Model: ${ev.model || "—"}`;
+      body.appendChild(p);
+      if (ev.generationConfig) {
+        appendAuditPre(body, "Generation config", JSON.stringify(ev.generationConfig, null, 2), true);
+      }
+      if (ev.request && ev.request.contents) {
+        appendAuditPre(body, "Prompt / contents", ev.request.contents, true);
+      }
+    } else if (type === "gemini_response") {
+      if (ev.usageMetadata) {
+        const tbl = document.createElement("div");
+        tbl.className = "audit-tokens";
+        tbl.textContent = formatTokenTotals(ev.usageMetadata);
+        body.appendChild(tbl);
+      }
+      if (ev.finishReason) {
+        const p = document.createElement("p");
+        p.className = "audit-kv";
+        p.textContent = `Finish reason: ${ev.finishReason}`;
+        body.appendChild(p);
+      }
+      if (ev.thoughtText) appendAuditPre(body, "Reasoning / thought text", ev.thoughtText, true);
+      if (ev.visibleText) appendAuditPre(body, "Visible model output", ev.visibleText, false);
+      if (ev.parsed) appendAuditPre(body, "Parsed JSON", JSON.stringify(ev.parsed, null, 2), false);
+      if (ev.rawParts && ev.rawParts.length) {
+        appendAuditPre(body, "Raw parts", JSON.stringify(ev.rawParts, null, 2), true);
+      }
+    } else if (type === "ai_output") {
+      appendAuditPre(body, "Output", JSON.stringify(ev.output, null, 2), false);
+    } else if (type === "error") {
+      const p = document.createElement("p");
+      p.className = "audit-kv hint-error";
+      p.textContent = ev.message || "Error";
+      body.appendChild(p);
+    } else {
+      appendAuditPre(body, "Event JSON", JSON.stringify(ev, null, 2), false);
+    }
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn audit-event-copy";
+    copyBtn.textContent = "Copy event JSON";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(ev, null, 2));
+      } catch {
+        /* ignore */
+      }
+    });
+    body.appendChild(copyBtn);
+
+    card.appendChild(body);
+    return card;
+  }
+
+  async function openAuditSessionModal(sessionId) {
+    const root = document.getElementById("audit-session-modal");
+    const bodyEl = document.getElementById("audit-session-modal-body");
+    const titleEl = document.getElementById("audit-session-modal-title");
+    if (!root || !bodyEl || !titleEl) return;
+
+    bodyEl.innerHTML = "";
+    titleEl.textContent = "Audit session";
+    root.hidden = false;
+    document.body.style.overflow = "hidden";
+
+    const loading = document.createElement("p");
+    loading.className = "hint";
+    loading.textContent = "Loading…";
+    bodyEl.appendChild(loading);
+
+    try {
+      const res = await apiFetch(`/audit-log/${encodeURIComponent(sessionId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      auditSessionDetail = data.session || null;
+    } catch (err) {
+      auditSessionDetail = null;
+      bodyEl.innerHTML = "";
+      const errP = document.createElement("p");
+      errP.className = "hint-error";
+      errP.textContent = (err && err.message) || "Failed to load session.";
+      bodyEl.appendChild(errP);
+      return;
+    }
+
+    bodyEl.innerHTML = "";
+    const s = auditSessionDetail;
+    if (!s) return;
+
+    titleEl.textContent = auditFeatureLabel(s.feature);
+    const summary = document.createElement("div");
+    summary.className = "audit-session-summary";
+    summary.innerHTML = `
+      <p class="audit-kv"><strong>Session ID:</strong> ${escapeHtml(s.id)}</p>
+      <p class="audit-kv"><strong>Created:</strong> ${escapeHtml(formatEntryTimestamp(s.createdAt))}</p>
+      <p class="audit-kv"><strong>Role:</strong> ${escapeHtml(s.actorRole === "user" ? "Staff" : "Admin")}</p>
+      <p class="audit-kv"><strong>Status:</strong> ${escapeHtml(s.status || "—")}</p>
+      <p class="audit-kv"><strong>Model:</strong> ${escapeHtml(s.model || "—")}</p>
+      <p class="audit-kv"><strong>Tokens:</strong> ${escapeHtml(formatTokenTotals(s.tokenTotals))}</p>
+    `;
+    bodyEl.appendChild(summary);
+
+    const timeline = document.createElement("div");
+    timeline.className = "audit-timeline";
+    const events = Array.isArray(s.events) ? s.events : [];
+    if (!events.length) {
+      const empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "No events recorded.";
+      timeline.appendChild(empty);
+    } else {
+      events.forEach((ev, i) => timeline.appendChild(renderAuditEvent(ev, i)));
+    }
+    bodyEl.appendChild(timeline);
+  }
+
+  function closeAuditSessionModal() {
+    const root = document.getElementById("audit-session-modal");
+    if (root) root.hidden = true;
+    document.body.style.overflow = "";
+    auditSessionDetail = null;
   }
 
   function openLibraryCaseModal(c) {
@@ -1865,6 +2154,16 @@
     if (panelAdd) panelAdd.hidden = true;
   }
 
+  function deactivateAuditTab() {
+    const tabAudit = document.getElementById("tab-audit");
+    const panelAudit = document.getElementById("panel-audit");
+    if (tabAudit) {
+      tabAudit.classList.remove("tab-active");
+      tabAudit.setAttribute("aria-selected", "false");
+    }
+    if (panelAudit) panelAudit.hidden = true;
+  }
+
   function switchToGenerate() {
     document.getElementById("tab-generate").classList.add("tab-active");
     document.getElementById("tab-library").classList.remove("tab-active");
@@ -1873,6 +2172,7 @@
     document.getElementById("tab-library").setAttribute("aria-selected", "false");
     document.getElementById("tab-knowledge").setAttribute("aria-selected", "false");
     deactivateAddReplyTab();
+    deactivateAuditTab();
     document.getElementById("panel-generate").hidden = false;
     document.getElementById("panel-library").hidden = true;
     document.getElementById("panel-knowledge").hidden = true;
@@ -1891,6 +2191,7 @@
     document.getElementById("panel-generate").hidden = true;
     document.getElementById("panel-library").hidden = true;
     document.getElementById("panel-knowledge").hidden = true;
+    deactivateAuditTab();
     refreshTextareaHeights(document.getElementById("panel-add-reply"));
   }
 
@@ -1902,6 +2203,7 @@
     document.getElementById("tab-generate").setAttribute("aria-selected", "false");
     document.getElementById("tab-knowledge").setAttribute("aria-selected", "false");
     deactivateAddReplyTab();
+    deactivateAuditTab();
     document.getElementById("panel-library").hidden = false;
     document.getElementById("panel-generate").hidden = true;
     document.getElementById("panel-knowledge").hidden = true;
@@ -1915,12 +2217,30 @@
     document.getElementById("tab-generate").setAttribute("aria-selected", "false");
     document.getElementById("tab-library").setAttribute("aria-selected", "false");
     deactivateAddReplyTab();
+    deactivateAuditTab();
     document.getElementById("panel-knowledge").hidden = false;
     document.getElementById("panel-generate").hidden = true;
     document.getElementById("panel-library").hidden = true;
     if (isAdminRole()) {
       fetchKnowledge();
     }
+  }
+
+  function switchToAudit() {
+    document.getElementById("tab-audit").classList.add("tab-active");
+    document.getElementById("tab-generate").classList.remove("tab-active");
+    document.getElementById("tab-library").classList.remove("tab-active");
+    document.getElementById("tab-knowledge").classList.remove("tab-active");
+    document.getElementById("tab-audit").setAttribute("aria-selected", "true");
+    document.getElementById("tab-generate").setAttribute("aria-selected", "false");
+    document.getElementById("tab-library").setAttribute("aria-selected", "false");
+    document.getElementById("tab-knowledge").setAttribute("aria-selected", "false");
+    deactivateAddReplyTab();
+    document.getElementById("panel-audit").hidden = false;
+    document.getElementById("panel-generate").hidden = true;
+    document.getElementById("panel-library").hidden = true;
+    document.getElementById("panel-knowledge").hidden = true;
+    if (isAdminRole()) fetchAuditLog();
   }
 
   function resetLibraryForm() {
@@ -1949,6 +2269,18 @@
     document.getElementById("tab-add-reply")?.addEventListener("click", switchToAddReply);
     document.getElementById("tab-library").addEventListener("click", switchToLibrary);
     document.getElementById("tab-knowledge").addEventListener("click", switchToKnowledge);
+    document.getElementById("tab-audit")?.addEventListener("click", switchToAudit);
+
+    document.getElementById("audit-session-modal-close")?.addEventListener("click", closeAuditSessionModal);
+    document.getElementById("audit-session-modal-backdrop")?.addEventListener("click", closeAuditSessionModal);
+    document.getElementById("audit-session-copy-json")?.addEventListener("click", async () => {
+      if (!auditSessionDetail) return;
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(auditSessionDetail, null, 2));
+      } catch {
+        /* ignore */
+      }
+    });
 
     document.getElementById("library-search").addEventListener("input", renderLibraryList);
 
@@ -2009,16 +2341,26 @@
       let clarifications = [];
       let round = 1;
       let lastQuestionsTransparency = null;
+      let auditSessionId =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : "audit-client-" + Date.now();
+      let uiStep = "generate";
       // Up to 2 phases: ask once, then force a draft.
       for (let attempt = 0; attempt < 2; attempt++) {
-        const result = await generateReplyFacade(reviewText, lib, clarifications, round);
+        const result = await generateReplyFacade(reviewText, lib, clarifications, round, {
+          auditSessionId,
+          uiStep,
+        });
+        if (result.auditSessionId) auditSessionId = result.auditSessionId;
         if (result.status === "questions" && result.questions.length && attempt === 0) {
           lastQuestionsTransparency = result.transparency;
           if (isAdminRole()) {
             renderTransparency("gen-transparency-matches", result.transparency);
           }
-          const answers = await renderClarifyForm(result.questions);
-          clarifications = answers;
+          const clarifyResult = await renderClarifyForm(result.questions);
+          clarifications = clarifyResult.clarifications || [];
+          uiStep = clarifyResult.uiStep || "clarify_submit";
           round = 2;
           if (isAdminRole()) fetchKnowledge();
           continue;

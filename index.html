@@ -41,6 +41,7 @@
       <button type="button" class="tab user-only" role="tab" id="tab-add-reply" aria-controls="panel-add-reply" aria-selected="false">Add approved reply</button>
       <button type="button" class="tab admin-only" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false">Review Library</button>
       <button type="button" class="tab admin-only" role="tab" id="tab-knowledge" aria-controls="panel-knowledge" aria-selected="false">Clinic knowledge</button>
+      <button type="button" class="tab admin-only" role="tab" id="tab-audit" aria-controls="panel-audit" aria-selected="false">Audit log</button>
     </nav>
 
     <main>
@@ -170,6 +171,16 @@
         </div>
       </section>
 
+      <section id="panel-audit" class="panel admin-only" role="tabpanel" aria-labelledby="tab-audit" hidden>
+        <div class="stack">
+          <div class="card audit-card">
+            <h2>AI audit log</h2>
+            <p class="hint">Full record of Generate Reply and Suggest knowledge flows: user input, Gemini request/response payloads, token usage (including reasoning), and final output. Requires Supabase <code>ai_audit_sessions</code> table.</p>
+            <div id="audit-list" class="audit-list"></div>
+          </div>
+        </div>
+      </section>
+
       <section id="panel-library" class="panel admin-only" role="tabpanel" aria-labelledby="tab-library" hidden>
         <div class="stack library-layout">
           <div class="card">
@@ -274,6 +285,22 @@
           <button type="button" class="btn primary" id="ks-save" disabled>Add to clinic knowledge</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="audit-session-modal" class="case-modal-root admin-only" hidden>
+    <div class="case-modal-backdrop" id="audit-session-modal-backdrop" tabindex="-1"></div>
+    <div class="case-modal-panel audit-modal-panel" role="dialog" aria-modal="true" aria-labelledby="audit-session-modal-title">
+      <header class="case-modal-header">
+        <h2 id="audit-session-modal-title">Audit session</h2>
+        <div class="audit-modal-header-actions">
+          <button type="button" class="btn" id="audit-session-copy-json">Copy full session</button>
+          <button type="button" class="btn case-modal-close" id="audit-session-modal-close" aria-label="Close dialog">
+            Close
+          </button>
+        </div>
+      </header>
+      <div class="case-modal-body" id="audit-session-modal-body"></div>
     </div>
   </div>
 

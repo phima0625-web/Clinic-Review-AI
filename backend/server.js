@@ -54,6 +54,14 @@ const {
   normalizeCaseCategory,
   normalizeCaseCategories,
 } = require("./db");
+const {
+  isAuditEnabled,
+  createOrLoadSession,
+  appendAuditEvents,
+  listAuditSessions,
+  getAuditSession,
+  reviewPreviewFromText,
+} = require("./audit");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -224,6 +232,101 @@ function extractGeminiReplyText(response) {
   }
   const body = fromParts.length > viaGetter.length ? fromParts : viaGetter;
   return typeof body === "string" ? body.trim() : "";
+}
+
+/** Concatenate model "thought" / reasoning parts when thinking is enabled. */
+function extractGeminiThoughtText(response) {
+  const parts = response?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return "";
+  let out = "";
+  for (const part of parts) {
+    if (!part || typeof part.text !== "string") continue;
+    if (part.thought !== true) continue;
+    out += part.text;
+  }
+  return out.trim();
+}
+
+/** Sanitized part list for audit debugging (text + thought flag only). */
+function extractGeminiRawParts(response) {
+  const parts = response?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .filter((p) => p && typeof p.text === "string")
+    .map((p) => ({
+      text: p.text,
+      thought: p.thought === true,
+    }));
+}
+
+/** Normalize token usage from Gemini SDK response.usageMetadata. */
+function extractGeminiUsageMetadata(response) {
+  const u = response?.usageMetadata;
+  if (!u || typeof u !== "object") return null;
+  const out = {};
+  const map = [
+    ["promptTokenCount", u.promptTokenCount],
+    ["candidatesTokenCount", u.candidatesTokenCount],
+    ["outputTokenCount", u.outputTokenCount],
+    ["totalTokenCount", u.totalTokenCount],
+    ["thoughtsTokenCount", u.thoughtsTokenCount],
+    ["cachedContentTokenCount", u.cachedContentTokenCount],
+  ];
+  for (const [key, val] of map) {
+    if (typeof val === "number" && Number.isFinite(val)) out[key] = val;
+  }
+  if (out.candidatesTokenCount == null && out.outputTokenCount != null) {
+    out.candidatesTokenCount = out.outputTokenCount;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+async function callGeminiWithAudit(ai, { model, contents, config }) {
+  const requestAt = new Date().toISOString();
+  const requestEvent = {
+    type: "gemini_request",
+    at: requestAt,
+    model,
+    generationConfig: config || {},
+    request: { contents: typeof contents === "string" ? contents : String(contents || "") },
+  };
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+      config,
+    });
+    const responseEvent = {
+      type: "gemini_response",
+      at: new Date().toISOString(),
+      model,
+      finishReason: response?.candidates?.[0]?.finishReason || null,
+      usageMetadata: extractGeminiUsageMetadata(response),
+      visibleText: extractGeminiReplyText(response),
+      thoughtText: extractGeminiThoughtText(response),
+      rawParts: extractGeminiRawParts(response),
+    };
+    return { response, auditEvents: [requestEvent, responseEvent], error: null };
+  } catch (err) {
+    const errorEvent = {
+      type: "error",
+      at: new Date().toISOString(),
+      phase: "gemini_request",
+      message: err && err.message ? err.message : String(err),
+    };
+    return { response: null, auditEvents: [requestEvent, errorEvent], error: err };
+  }
+}
+
+async function ensureAuditSession(sessionId, meta) {
+  if (!isAuditEnabled()) return null;
+  const loaded = await createOrLoadSession(sessionId, meta);
+  return loaded ? loaded.id : null;
+}
+
+async function recordAuditEvents(sessionId, events, patch) {
+  if (!isAuditEnabled() || !sessionId) return;
+  await appendAuditEvents(sessionId, events, patch);
 }
 
 /** generationConfig: disable thinking by default (0) so visible reply gets the full output budget. */
@@ -1240,42 +1343,143 @@ app.post("/suggest-knowledge-from-case", requireAuth, requireAdmin, async (req, 
     });
   }
 
+  let auditSessionId = null;
   try {
     const prompt = buildKnowledgeFromCasePrompt(libCase);
+    const config = buildKnowledgeFromCaseJsonConfig();
+    auditSessionId = await ensureAuditSession(null, {
+      actorRole: req.authRole || "admin",
+      feature: "suggest_knowledge",
+      model: GEMINI_MODEL,
+      reviewPreview: reviewPreviewFromText(libCase.reviewText || replyText),
+    });
+
+    if (auditSessionId) {
+      await recordAuditEvents(
+        auditSessionId,
+        [
+          {
+            type: "user_input",
+            at: new Date().toISOString(),
+            uiStep: "knowledge-suggest-modal",
+            libraryCase: libCase,
+          },
+        ],
+        { model: GEMINI_MODEL, reviewPreview: reviewPreviewFromText(libCase.reviewText || replyText) }
+      );
+    }
+
     const { GoogleGenAI } = await loadGenAi();
     const apiKey = String(process.env.GEMINI_API_KEY).trim();
     const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
+    const gemini = await callGeminiWithAudit(ai, {
       model: GEMINI_MODEL,
       contents: prompt,
-      config: buildKnowledgeFromCaseJsonConfig(),
+      config,
     });
-    const rawText = extractGeminiReplyText(response);
+
+    if (auditSessionId) {
+      await recordAuditEvents(auditSessionId, gemini.auditEvents, {
+        status: gemini.error ? "error" : "in_progress",
+        model: GEMINI_MODEL,
+      });
+    }
+
+    if (gemini.error || !gemini.response) {
+      throw gemini.error || new Error("Gemini request failed.");
+    }
+
+    const rawText = extractGeminiReplyText(gemini.response);
     const parsed = parseKnowledgeSuggest(rawText);
     if (!parsed) {
+      if (auditSessionId) await recordAuditEvents(auditSessionId, [], { status: "error" });
       return res.status(502).json({
         error: "Gemini did not return valid JSON. Try again or shorten the case text.",
+        auditSessionId,
       });
     }
     const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
     const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
     if (!question || !answer) {
-      return res.status(502).json({ error: "Model returned empty question or answer." });
+      if (auditSessionId) await recordAuditEvents(auditSessionId, [], { status: "error" });
+      return res.status(502).json({ error: "Model returned empty question or answer.", auditSessionId });
     }
     const category = normalizeKnowledgeCategory(parsed.category, normalizeCaseCategory(libCase));
-    return res.json({ question, answer, category });
+
+    if (auditSessionId) {
+      await recordAuditEvents(
+        auditSessionId,
+        [
+          {
+            type: "ai_output",
+            at: new Date().toISOString(),
+            output: { question, answer, category },
+          },
+        ],
+        { status: "reply" }
+      );
+    }
+
+    return res.json({ question, answer, category, auditSessionId });
   } catch (err) {
     console.error("suggest-knowledge-from-case:", err && err.message ? err.message : err);
+    if (auditSessionId) {
+      await recordAuditEvents(
+        auditSessionId,
+        [
+          {
+            type: "error",
+            at: new Date().toISOString(),
+            phase: "suggest_knowledge",
+            message: err && err.message ? err.message : String(err),
+          },
+        ],
+        { status: "error" }
+      );
+    }
     const message = err && err.message ? err.message : "Unknown error calling Gemini.";
     return res.status(502).json({
       error: `Request failed: ${message}. Check GEMINI_API_KEY, GEMINI_MODEL, and your network.`,
+      auditSessionId,
     });
+  }
+});
+
+app.get("/audit-log", requireAuth, requireAdmin, async (req, res) => {
+  if (!isAuditEnabled()) {
+    return res.status(503).json({
+      error: "Audit log requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    });
+  }
+  try {
+    const limit = parseInt(String(req.query.limit || "50"), 10);
+    const offset = parseInt(String(req.query.offset || "0"), 10);
+    const items = await listAuditSessions({ limit, offset });
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load audit log." });
+  }
+});
+
+app.get("/audit-log/:id", requireAuth, requireAdmin, async (req, res) => {
+  if (!isAuditEnabled()) {
+    return res.status(503).json({
+      error: "Audit log requires Supabase. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    });
+  }
+  try {
+    const session = await getAuditSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Audit session not found." });
+    res.json({ session });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load audit session." });
   }
 });
 
 
 app.post("/generate-reply", requireAuth, async (req, res) => {
-  const { review, context, pastCases, clarifications, round } = req.body || {};
+  const { review, context, pastCases, clarifications, round, auditSessionId: bodyAuditId, uiStep } =
+    req.body || {};
 
   if (review !== undefined && typeof review !== "string") {
     return res.status(400).json({ error: "Field 'review' must be a string when provided." });
@@ -1340,17 +1544,58 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
     cleanClarifications.length > 0
   );
 
+  const reviewText = typeof review === "string" ? review : "";
+  const resolvedUiStep =
+    typeof uiStep === "string" && uiStep.trim()
+      ? uiStep.trim()
+      : roundNum >= 2
+        ? "clarify_submit"
+        : "generate";
+
+  let auditSessionId = await ensureAuditSession(bodyAuditId, {
+    actorRole: req.authRole || "admin",
+    feature: "generate_reply",
+    model: GEMINI_MODEL,
+    review: reviewText,
+  });
+
+  if (auditSessionId) {
+    await recordAuditEvents(
+      auditSessionId,
+      [
+        {
+          type: "user_input",
+          at: new Date().toISOString(),
+          round: roundNum,
+          uiStep: resolvedUiStep,
+          review: reviewText,
+          context: { situation, category: reviewCategory },
+          clarifications: cleanClarifications,
+        },
+      ],
+      { model: GEMINI_MODEL, reviewPreview: reviewPreviewFromText(reviewText) }
+    );
+  }
+
   try {
     const { GoogleGenAI } = await loadGenAi();
     const apiKey = String(process.env.GEMINI_API_KEY).trim();
     const ai = new GoogleGenAI({ apiKey });
-
-    const response = await ai.models.generateContent({
+    const geminiConfig = buildJsonGenerationConfig();
+    const gemini = await callGeminiWithAudit(ai, {
       model: GEMINI_MODEL,
       contents: prompt,
-      config: buildJsonGenerationConfig(),
+      config: geminiConfig,
     });
 
+    if (gemini.error || !gemini.response) {
+      if (auditSessionId) {
+        await recordAuditEvents(auditSessionId, gemini.auditEvents, { status: "error" });
+      }
+      throw gemini.error || new Error("Gemini request failed.");
+    }
+
+    const response = gemini.response;
     const fr = response.candidates?.[0]?.finishReason;
     if (fr && fr !== "STOP" && fr !== "FINISH_REASON_UNSPECIFIED") {
       console.warn("Gemini finishReason:", fr, "(reply may be truncated; try raising GEMINI_MAX_OUTPUT_TOKENS)");
@@ -1358,6 +1603,22 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
 
     const rawText = extractGeminiReplyText(response);
     const decision = parseModelDecision(rawText);
+
+    if (auditSessionId) {
+      const auditEvents = gemini.auditEvents.map((ev) => {
+        if (ev.type !== "gemini_response") return ev;
+        return {
+          ...ev,
+          parsed: decision || null,
+          parsedFallbackText: decision ? null : rawText || null,
+        };
+      });
+      await recordAuditEvents(auditSessionId, auditEvents, {
+        model: GEMINI_MODEL,
+        status: "in_progress",
+      });
+    }
+
     let knowledgeCitedForResponse = [];
     if (decision && Array.isArray(decision.knowledge_refs)) {
       knowledgeCitedForResponse = resolveKnowledgeCited(
@@ -1383,18 +1644,28 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
       // Fallback: model didn't return JSON; treat raw text as reply if non-empty.
       const fallbackReply = applyClinicContactPlaceholders(typeof rawText === "string" ? rawText : "");
       if (!fallbackReply.trim()) {
+        if (auditSessionId) await recordAuditEvents(auditSessionId, [], { status: "error" });
         return res.status(502).json({
           error:
             "Gemini did not return a parseable response. Try again, or increase GEMINI_MAX_OUTPUT_TOKENS.",
+          auditSessionId,
         });
       }
       let savedKnowledgeAfter = savedKnowledgeBefore;
       if (cleanClarifications.length) {
         savedKnowledgeAfter = await appendKnowledge(cleanClarifications, reviewCategory);
       }
+      if (auditSessionId) {
+        await recordAuditEvents(
+          auditSessionId,
+          [{ type: "ai_output", at: new Date().toISOString(), output: { reply: fallbackReply, fallback: true } }],
+          { status: "reply" }
+        );
+      }
       return res.json({
         status: "reply",
         reply: fallbackReply,
+        auditSessionId,
         transparency: {
           ...transparencyBase,
           knowledgeUsed: savedKnowledgeAfter.length,
@@ -1406,10 +1677,24 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
     }
 
     if (decision.needs_clarification && !forceReply && decision.questions.length) {
+      if (auditSessionId) {
+        await recordAuditEvents(
+          auditSessionId,
+          [
+            {
+              type: "ai_output",
+              at: new Date().toISOString(),
+              output: { questions: decision.questions, needs_clarification: true },
+            },
+          ],
+          { status: "questions" }
+        );
+      }
       return res.json({
         status: "questions",
         questions: decision.questions,
         round: roundNum,
+        auditSessionId,
         transparency: {
           ...transparencyBase,
           replyNote:
@@ -1420,15 +1705,35 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
 
     const reply = applyClinicContactPlaceholders(decision.reply || "");
     if (!reply.trim()) {
+      if (auditSessionId) await recordAuditEvents(auditSessionId, [], { status: "error" });
       return res.status(502).json({
         error:
           "Gemini returned an empty reply. Try again, increase GEMINI_MAX_OUTPUT_TOKENS, or simplify the input.",
+        auditSessionId,
       });
     }
 
     let savedKnowledgeAfter = savedKnowledgeBefore;
     if (cleanClarifications.length) {
       savedKnowledgeAfter = await appendKnowledge(cleanClarifications, reviewCategory);
+    }
+
+    if (auditSessionId) {
+      await recordAuditEvents(
+        auditSessionId,
+        [
+          {
+            type: "ai_output",
+            at: new Date().toISOString(),
+            output: {
+              reply,
+              knowledge_refs: decision.knowledge_refs || [],
+              needs_clarification: false,
+            },
+          },
+        ],
+        { status: "reply" }
+      );
     }
 
     const transparency = {
@@ -1442,15 +1747,30 @@ app.post("/generate-reply", requireAuth, async (req, res) => {
         ` Have a staff member review before posting.`,
     };
 
-    return res.json({ status: "reply", reply, transparency });
+    return res.json({ status: "reply", reply, auditSessionId, transparency });
   } catch (err) {
     console.error("Gemini error:", err && err.message ? err.message : err);
+    if (auditSessionId) {
+      await recordAuditEvents(
+        auditSessionId,
+        [
+          {
+            type: "error",
+            at: new Date().toISOString(),
+            phase: "generate_reply",
+            message: err && err.message ? err.message : String(err),
+          },
+        ],
+        { status: "error" }
+      );
+    }
     const message =
       err && err.message
         ? err.message
         : "Unknown error calling Gemini.";
     return res.status(502).json({
       error: `Gemini request failed: ${message}. Check GEMINI_API_KEY, GEMINI_MODEL, and your network.`,
+      auditSessionId,
     });
   }
 });
@@ -1465,7 +1785,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Clinic Review AI backend: http://localhost:${PORT}`);
   console.log(
-    "Routes: GET /, GET /auth/config, GET /auth/me, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /library/cases, POST /generate-reply, POST /suggest-knowledge-from-case"
+    "Routes: GET /, GET /auth/config, GET /auth/me, POST /auth/login, GET/PUT /knowledge, GET/PUT /library, POST /library/cases, POST /generate-reply, POST /suggest-knowledge-from-case, GET /audit-log, GET /audit-log/:id"
   );
   if (isDbEnabled()) {
     console.log("Storage: Supabase (clinic_knowledge + review_library).");
@@ -1473,6 +1793,11 @@ app.listen(PORT, () => {
     console.warn(
       "Storage: knowledge.json file only. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for persistent cloud storage."
     );
+  }
+  if (isAuditEnabled()) {
+    console.log("Audit log: Supabase ai_audit_sessions (admin GET /audit-log).");
+  } else if (isDbEnabled()) {
+    console.warn("Audit log: disabled until ai_audit_sessions table exists in Supabase.");
   }
   if (authEnabled()) {
     const parts = [];
