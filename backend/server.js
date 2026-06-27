@@ -660,12 +660,13 @@ const GEMINI_STYLE_RULES = [
   "No diagnosis, medical advice, or protected health information.",
   "No legal admissions or guaranteed outcomes.",
   "Output only the reply text—no labels or quotes around it.",
-  "Examples may include the clinic’s internal notes from that time—use them to learn what we choose to clarify publicly vs keep private; never paste private details.",
+  "Examples may include the clinic’s internal notes from that time—use them to learn what we clarify publicly vs keep private; **include public-safe incident and policy facts** from internal context when they relate to the complaint (paraphrase; never PHI or patient identifiers).",
   "Learn the relationship between past review → internal context → approved reply (what was acknowledged, when we explained vs avoided explaining, how we handled follow-up). Mimic the decision-making, not the wording.",
   "Reuse the same structure when a past case is extremely similar (same issue, similar context, similar resolution); still adapt phrasing to fit the new case. Avoid verbatim copy except for short generic empathy lines.",
   "Saved clinic knowledge (knowledge.json) is cumulative policy and standing facts—use it together with past library examples: knowledge for what is true/allowable; examples for voice, length, and structure.",
   "When staff have just answered your clarifying questions, treat those answers as **authoritative policy/facts** for this draft: reflect them clearly in the public reply’s explanation (patient-friendly paraphrase), even if past examples used vaguer wording.",
-  "When staff type policy, regulatory/program rules, or billing facts into **internal context**, treat that as authorized substance for the public reply: explain it clearly for future readers (paraphrase; no PHI), and do not drop it to match vaguer library examples.",
+  "When staff type policy, regulatory/program rules, billing facts, or **what happened that day** into **internal context**, treat that as authorized substance for the public reply: explain it clearly for future readers (paraphrase; no PHI), and do not drop it to match vaguer library examples.",
+  "When internal context describes **operational or incident facts** (timing, staffing, process followed, what was offered) that relate to the complaint, the draft must include those facts in the explanation so future readers understand what occurred—not only generic empathy.",
   "If the **review challenges** a requirement and context states the **correct rule**, the draft must **explain that rule** in the reply body—not only apologize without addressing the policy point.",
   "Reply ending: **only** CLOSING A or CLOSING B from the OPERATIONS CONTACT block — see that block for the exact sentences. No other sign-offs.",
   "Reply shape: brief empathy+reassurance, lean clarification/explanation, optional light accountability, then **exactly one** of CLOSING A or CLOSING B — one flowing reply (no outline in posted text).",
@@ -824,7 +825,7 @@ function buildGeminiPrompt(
 ) {
   const situationTrim = typeof situation === "string" ? situation.trim() : "";
   const situationBlock = situationTrim
-    ? `Internal staff context (staff-only — do **not** paste this block verbatim; **do** use stated **policies, regulatory/program requirements, and billing facts** to shape the public reply in plain patient language; paraphrase; never PHI or internal identifiers):
+    ? `Internal staff context (staff-only input — do **not** paste this block verbatim; **do** use stated **policies, regulatory/program requirements, billing facts, and what occurred that day** in the public reply’s explanation when they relate to the complaint; patient-friendly paraphrase; never PHI or patient-identifying details):
 """
 ${situationTrim}
 """
@@ -862,7 +863,7 @@ ${situationTrim}
     : "(No similar past cases were included — fall back to professional, empathetic defaults.)";
 
   const threeSources = `THREE SOURCES OF REASONING (apply in this order):
-1) INTERNAL STAFF CONTEXT — When non-empty, it is the **primary** source for **what happened** and for **policy/regulatory/billing facts** the staff chose to give you (e.g. agency guidance like immigration-medical vaccine rules, seasonal facts, “standard practice” vs misconception in the review). If the review **asserts** a **policy misconception** and context **corrects** it, the reply’s **explanation must carry** that correction (not only sympathy). **Reflect** those **public-safe** facts/policies in the reply’s **explanation** so readers understand compliance and fairness—paraphrase; never PHI. Do not ignore stated rules just to keep the reply shorter or to match a generic example.
+1) INTERNAL STAFF CONTEXT — When non-empty, it is the **primary** source for **what happened** (operational/incident narrative: timing, staffing, process followed, what was offered or done that day) and for **policy/regulatory/billing facts** the staff chose to give you (e.g. agency guidance like immigration-medical vaccine rules, seasonal facts, “standard practice” vs misconception in the review). When context facts **directly or indirectly** address the reviewer’s concern, the reply’s **explanation must carry** that substance (not only sympathy)—so future readers understand what truly occurred. If the review **asserts** a **policy misconception** and context **corrects** it, the reply’s **explanation must carry** that correction too. **Reflect** those **public-safe** facts/policies in the reply’s **explanation**—paraphrase; never PHI or patient identifiers. Do not ignore stated facts just to keep the reply shorter or to match a generic example.
 2) CLINIC KNOWLEDGE — Persistent Q/A uses the **same seven categories** as Review Library. Use it when context is missing to explain **general** operations and policy in neutral, professional language. Never present an assumption or inference as a confirmed fact.
 3) CLARIFICATION — If you need more information before a safe public reply, ask **the clinic staff member using this tool** (not the patient/reviewer). Output those questions **before** the final reply (see OUTPUT MODE and CLARIFYING QUESTIONS STYLE). Do not guess or invent facts.`;
 
@@ -879,8 +880,10 @@ The knowledge block includes **"Just-confirmed answers for this review"** — wh
       : "";
 
   const contextPolicyPriorityBlock = situationTrim
-    ? `INTERNAL CONTEXT — **AUTHORIZED POLICY & FACTS** (staff typed this for you — **substance must reach the public reply** when relevant):
-The **Internal staff context** block may include regulatory or program rules (e.g. civil surgeon / immigration medical requirements), seasonal or clinical facts, standard clinic policy, or **billing truth** (e.g. fee was required by guideline, **not** an improper add-on).
+    ? `INTERNAL CONTEXT — **AUTHORIZED FACTS FOR THE PUBLIC REPLY** (staff typed this for you — **substance must reach the public reply** when relevant):
+The **Internal staff context** block may include **what occurred that day** (operations, timing, staffing constraints, process followed, what was offered or done), regulatory or program rules (e.g. civil surgeon / immigration medical requirements), seasonal or clinical facts, standard clinic policy, or **billing truth** (e.g. fee was required by guideline, **not** an improper add-on).
+- **Incident / operational facts (mandatory when relevant):** When staff describe **what happened that day** and it **directly or indirectly** relates to the reviewer’s complaint, the public reply **must include** those facts in the **clarification/explanation**—patient-friendly paraphrase, not verbatim paste. Goal: future readers (patients, managers, auditors) understand **what truly occurred**, not only generic empathy. **Do not** omit authorized incident facts to keep the reply vague.
+- **Public-safe only:** No PHI, no patient names/DOB/MRN/appointment identifiers, no other patients’ details, no diagnosis or medical advice. OK example: “That day we were running behind due to an emergency visit, which extended wait times.” NOT OK: patient name, chart details, or another patient’s situation.
 - **Review vs context (mandatory):** When the **patient’s review disputes** whether something was **required or appropriate** (e.g. claims a flu vaccine “wasn’t required” for an immigration medical exam) and **context** states the **actual rule** (e.g. when flu vaccine is **available to the civil surgeon**, the exam process **requires** it per applicable program guidance), the public reply **must** include that **policy substance** in the **clarification/explanation**—patient-friendly paraphrase, neutral tone. **Do not** respond with only empathy/apology while **omitting** the rule that answers the complaint; that is **forbidden**.
 - When context states a **rule, requirement, or factual basis** for the clinic’s action, the public **reply must incorporate** that idea in the **clarification/explanation** part so future readers see the clinic **followed applicable guidance**—not arbitrary policy. Use **patient-friendly paraphrase**; avoid long quoted blocks; **no PHI**.
 - Do **not** omit or soften these points to match a vaguer **past example**. Examples = **tone/structure**; context = **authorized facts and policy** for **this** response.
@@ -894,13 +897,13 @@ The **Internal staff context** block may include regulatory or program rules (e.
 - PAST EXAMPLES below were selected with **same-category-first** logic (like clinic knowledge). Use them for voice, structure, empathy, pacing, and review→context→reply patterns.
 - Align **substance** with internal context (when present) and clinic knowledge; align **style** with examples. If an example conflicts with context/knowledge on facts, follow context and knowledge.
 - When **staff-confirmed answers** are present (see STAFF-CONFIRMED ANSWERS above if shown), they outrank example-implied facts for **policy and operational truth** — still keep the reply’s **voice** like the examples where possible.
-- When **internal staff context** states policy/regulatory/billing facts (see INTERNAL CONTEXT — AUTHORIZED POLICY & FACTS above if shown), those outrank **examples** for **substance**; incorporate them in the explanation.
+- When **internal staff context** states policy/regulatory/billing facts or **incident/operational facts** (see INTERNAL CONTEXT — AUTHORIZED FACTS FOR THE PUBLIC REPLY above if shown), those outrank **examples** for **substance**; incorporate them in the explanation.
 - Without reliable context or knowledge for this incident, keep the reply **general and empathetic** — no specific claims about what happened.`;
 
   const clarificationRules = forceReply
     ? `OUTPUT MODE — FINAL REPLY ONLY (prior round already asked or skipped clarifications):
 - Set "needs_clarification" false, "questions" [], complete "reply", and "knowledge_refs" to ids from the knowledge block you used (or []).
-- **Internal context facts:** If **Internal staff context** states policies, regulatory/program requirements, or billing facts, the public reply **must reflect** their substance **when they rebut or clarify something the reviewer raised**—especially “you shouldn’t have required X” cases where context explains **why X was required** (patient-facing paraphrase). Do not produce a reply that ignores them.
+- **Internal context facts:** If **Internal staff context** states policies, regulatory/program requirements, billing facts, or **what happened that day** (operational/incident narrative), the public reply **must reflect** their substance when they relate to the complaint—whether they rebut a misconception, explain a requirement, or clarify **what occurred** (patient-facing paraphrase). Do not produce a reply that ignores them.
 - **Staff just-confirmed facts:** If **"Just-confirmed answers for this review"** appears in the knowledge block, the public reply **must incorporate** those policies/facts where relevant (patient-facing wording). Do not produce a reply that ignores them.
 - **Safe fallback:** If facts are still unclear, write a **short** reply that still **approximates** the reply structure (empathy + brief neutral line + light accountability if appropriate + **CLOSING A or B**): thank them, avoid claims you cannot verify, no blame — **do not fabricate events**. Use **CLOSING B** if follow-up is essential; otherwise **CLOSING A** when the reply still addresses what you can.`
     : `OUTPUT MODE — CLARIFY WHEN UNSURE, ELSE DRAFT:
@@ -913,7 +916,7 @@ CLARIFYING QUESTIONS STYLE (critical):
 - Questions must **not** request PHI or patient identifiers.
 
 - Prefer needs_clarification **true** (with 1–4 such staff-directed questions; "reply" "" ; knowledge_refs []) when internal context is empty or says staff cannot verify key facts, **and** clinic knowledge does not fill the gap, **or** uncertainty would change a fair public response.
-- Prefer needs_clarification **false** when **Internal staff context** and/or clinic knowledge already supply the **policy/regulatory/billing facts** needed to respond fairly (e.g. staff pasted program rules)—draft using that material rather than asking redundant staff questions.
+- Prefer needs_clarification **false** when **Internal staff context** and/or clinic knowledge already supply the **policy/regulatory/billing facts** or **incident/operational facts** needed to respond fairly (e.g. staff pasted what occurred that day or program rules)—draft using that material rather than asking redundant staff questions.
 - Do NOT re-ask what is already covered in injected knowledge (same category or "Other").
 - When asking clarifications, knowledge_refs must be [].`;
 
@@ -925,7 +928,7 @@ CLARIFYING QUESTIONS STYLE (critical):
 
 **Together, (1) + (2) must stay tight:** in **most** replies use **at most 2 short sentences total** for empathy + reassurance combined; **never more than 3 short sentences** for those two beats. Long openings read like generic AI — **avoid that**. **Trim redundant tails** on those sentences (importance fluff, “such an important …” echoes). The **heart of the reply** is **clarification/explanation (3)** — put every **required** fact there; **each sentence should earn its place** (no hedge clauses or duplicate ideas).
 
-3) **Clarification / explanation — ALWAYS (main body)** — This is the **most important** part. Use **internal staff context** (including any **regulatory/program rules, seasonal facts, or billing clarifications** staff typed there), **clinic knowledge**, and — when present — **just-confirmed staff answers** from the clarification step. Correct misunderstandings **neutrally**; explain **why** requirements apply when context authorizes you to (**patient-safe**, **non-defensive**). **Do not** sound defensive or argumentative. For a short praise/thank-you only, this may be one light sentence rather than a long policy paragraph — still keep (1)+(2) brief.
+3) **Clarification / explanation — ALWAYS (main body)** — This is the **most important** part. Use **internal staff context** (including **what occurred that day**, **regulatory/program rules**, seasonal facts, or **billing clarifications** staff typed there), **clinic knowledge**, and — when present — **just-confirmed staff answers** from the clarification step. When context describes **operational or incident facts** that relate to the complaint, **include them here** (paraphrased, public-safe) so readers understand what happened—do not omit them to stay vague. Correct misunderstandings **neutrally**; explain **why** requirements apply when context authorizes you to (**patient-safe**, **non-defensive**). **Do not** sound defensive or argumentative. For a short praise/thank-you only, this may be one light sentence rather than a long policy paragraph — still keep (1)+(2) brief.
 
 4) **Light accountability — OPTIONAL** — Only if internal context signals a concrete follow-up; **one short phrase** max. **Do not** add generic “we will review internally / ensure guidelines remain appropriate” filler when the explanation already addresses the concern. **Do not** admit wrongdoing or liability.
 
